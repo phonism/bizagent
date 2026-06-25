@@ -1,0 +1,829 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BizAgent</title>
+    <!-- Rich rendering is loaded from CDNs. All optional: if a CDN is unreachable (offline),
+         the UI degrades gracefully to plain text / textareas — chat still works. -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; color: #1a1a1a; }
+      a { color: #0a6; }
+
+      header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #111; color: #fff; }
+      header b { font-weight: 600; }
+      header .status { opacity: 0.55; font-size: 12px; }
+      header nav { display: flex; gap: 4px; margin-left: auto; }
+      header nav button {
+        padding: 5px 12px; border: 0; border-radius: 6px; background: #2a2a2a; color: #ccc;
+        cursor: pointer; font: inherit;
+      }
+      header nav button.active { background: #fff; color: #111; }
+      header select { padding: 5px 8px; border-radius: 6px; border: 0; font: inherit; }
+
+      main { height: calc(100vh - 45px); }
+      .view { height: 100%; display: none; }
+      .view.active { display: block; }
+
+      /* ── chat view ── */
+      #view-chat { display: none; grid-template-columns: 1fr 380px; }
+      #view-chat.active { display: grid; }
+      #chat { display: flex; flex-direction: column; border-right: 1px solid #e5e5e5; min-width: 0; }
+      #log { flex: 1; overflow-y: auto; padding: 16px; }
+      .msg { margin: 0 0 14px; word-break: break-word; }
+      .msg.user { color: #0b5; font-weight: 600; white-space: pre-wrap; }
+      .msg.tool { color: #999; font-size: 12px; font-family: ui-monospace, monospace; }
+      .msg.tool .arg { color: #777; }
+      .msg.tool details { display: inline; }
+      .msg.tool summary { cursor: pointer; color: #999; }
+      .msg.tool pre { margin: 4px 0 0; padding: 8px; background: #f6f8fa; border-radius: 6px; white-space: pre-wrap; color: #555; max-height: 220px; overflow: auto; }
+      .usage { color: #888; font-size: 12px; font-family: ui-monospace, monospace; }
+      .msg.job { color: #b45309; font-size: 13px; }
+      .msg.job button { margin-left: 8px; font-size: 12px; cursor: pointer; }
+      .msg.error { color: #c00; white-space: pre-wrap; }
+      .msg.sys { color: #aaa; font-size: 12px; }
+      .msg.assistant > :first-child { margin-top: 0; }
+      .msg.assistant > :last-child { margin-bottom: 0; }
+      .msg.assistant pre { background: #f6f8fa; padding: 12px; border-radius: 8px; overflow-x: auto; }
+      .msg.assistant code { font-family: ui-monospace, monospace; font-size: 13px; }
+      .msg.assistant :not(pre) > code { background: #f0f0f0; padding: 1px 5px; border-radius: 4px; }
+      .msg.assistant table { border-collapse: collapse; }
+      .msg.assistant th, .msg.assistant td { border: 1px solid #ddd; padding: 4px 8px; }
+      .chart { height: 320px; margin: 8px 0; }
+
+      form.chat { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #e5e5e5; }
+      input, textarea { padding: 9px 12px; border: 1px solid #ccc; border-radius: 8px; font: inherit; }
+      textarea { width: 100%; resize: vertical; min-height: 64px; }
+      form.chat input { flex: 1; }
+      button.go { padding: 9px 16px; border: 0; border-radius: 8px; background: #111; color: #fff; cursor: pointer; }
+      button.go:disabled { opacity: 0.4; cursor: default; }
+
+      /* ── worklog side panel ── */
+      #side { overflow-y: auto; padding: 16px; background: #fafafa; }
+      #side h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #999; margin: 18px 0 8px; }
+      #side h2:first-child { margin-top: 0; }
+      #side pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, monospace; margin: 0; }
+      #wl-live.empty { color: #bbb; }
+      .wl-item { padding: 7px 9px; margin-bottom: 6px; background: #fff; border: 1px solid #eee; border-radius: 7px; cursor: pointer; }
+      .wl-item:hover { border-color: #ccc; }
+      .wl-item .desc { font-size: 13px; }
+      .wl-item .meta { font-size: 11px; color: #aaa; font-family: ui-monospace, monospace; }
+      .wl-item pre { margin-top: 8px; border-top: 1px dashed #eee; padding-top: 8px; }
+      button.mini { font-size: 11px; padding: 2px 8px; border: 1px solid #ddd; border-radius: 6px; background: #fff; cursor: pointer; float: right; }
+      button.mini:hover { border-color: #aaa; }
+
+      /* ── memory + info views (single scrollable column) ── */
+      .panel { height: 100%; overflow-y: auto; padding: 24px; }
+      .panel .wrap { max-width: 760px; margin: 0 auto; }
+      .panel h1 { font-size: 18px; margin: 0 0 4px; }
+      .panel .hint { color: #999; margin: 0 0 18px; }
+      .toolbar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+      .toolbar input { flex: 1; min-width: 140px; }
+      .card { border: 1px solid #eaeaea; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; background: #fff; }
+      .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+      .chip { font-size: 11px; background: #eef6f1; color: #0a6; padding: 2px 8px; border-radius: 999px; }
+      .chip.scope { background: #eef1f6; color: #46a; }
+      .card .conf { font-size: 11px; color: #bbb; float: right; }
+      fieldset { border: 1px solid #eaeaea; border-radius: 10px; padding: 16px; margin-top: 18px; }
+      fieldset legend { padding: 0 6px; color: #666; font-size: 13px; }
+      fieldset label { display: block; font-size: 12px; color: #777; margin: 10px 0 4px; }
+      fieldset .row { display: flex; gap: 10px; align-items: flex-end; }
+      fieldset .row > div { flex: 1; }
+      .notice { font-size: 13px; padding: 8px 12px; border-radius: 8px; margin-top: 10px; }
+      .notice.err { background: #fdecec; color: #c00; }
+      .notice.ok { background: #eef9f1; color: #0a6; }
+      .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; margin-bottom: 16px; }
+      .kv .k { color: #999; }
+      #ctx { background: #f6f8fa; padding: 12px; border-radius: 8px; white-space: pre-wrap;
+             font: 12px/1.5 ui-monospace, monospace; max-height: 360px; overflow-y: auto; }
+
+      /* ── shared browse bits (knowledge, catalog, requirements) ── */
+      .card.clickable { cursor: pointer; }
+      .card.clickable:hover { border-color: #ccc; }
+      .card .meta { font-size: 11px; color: #aaa; font-family: ui-monospace, monospace; }
+      .layer-h { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #999; margin: 22px 0 8px; }
+      .layer-h:first-child { margin-top: 0; }
+      .filebody { white-space: pre-wrap; word-break: break-word; margin-top: 10px; border-top: 1px dashed #eee; padding-top: 10px; font: 12px/1.5 ui-monospace, monospace; max-height: 400px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <b>BizAgent</b>
+      <span class="status" id="status"></span>
+      <span class="usage" id="usage" title="cumulative cost / tokens / turns this session"></span>
+      <select id="ws" title="business"></select>
+      <nav>
+        <button data-view="chat" class="active">Chat</button>
+        <button data-view="memory">Memory</button>
+        <button data-view="knowledge">Knowledge</button>
+        <button data-view="catalog">Catalog</button>
+        <button data-view="requirements">Tasks</button>
+        <button data-view="info">Info</button>
+      </nav>
+    </header>
+
+    <main>
+      <!-- Chat -->
+      <section id="view-chat" class="view active">
+        <div id="chat">
+          <div id="log"></div>
+          <form class="chat" id="f">
+            <input id="i" placeholder="Ask the agent…" autocomplete="off" disabled />
+            <button class="go" id="b" disabled>Send</button>
+          </form>
+        </div>
+        <aside id="side">
+          <h2>Sessions <button id="new-sess" class="mini" title="start a fresh session">+ new</button></h2>
+          <div id="sess-list"></div>
+          <h2>Worklog (live)</h2>
+          <pre id="wl-live" class="empty">— not written yet —</pre>
+        </aside>
+      </section>
+
+      <!-- Memory -->
+      <section id="view-memory" class="view">
+        <div class="panel">
+          <div class="wrap">
+            <h1>Business memory</h1>
+            <p class="hint">Reusable findings for this business. Reads use <code>recall</code>; writes go through the same governance the write hook enforces.</p>
+            <div class="toolbar">
+              <input id="m-query" placeholder="search text…" />
+              <button class="go" id="m-search">Search</button>
+            </div>
+            <div id="m-list"></div>
+            <fieldset>
+              <legend>Add a memory</legend>
+              <label>Body</label>
+              <textarea id="m-body" placeholder="One reusable business fact…"></textarea>
+              <div class="row">
+                <button class="go" id="m-add">Add</button>
+              </div>
+              <div id="m-notice"></div>
+            </fieldset>
+          </div>
+        </div>
+      </section>
+
+      <!-- Info -->
+      <section id="view-info" class="view">
+        <div class="panel">
+          <div class="wrap">
+            <h1 id="info-name">Business</h1>
+            <p class="hint">Metadata, and a preview of the system prompt biz injects at launch.</p>
+            <div class="kv" id="info-kv"></div>
+            <button class="go" id="ctx-load">Load context preview</button>
+            <pre id="ctx" style="display: none"></pre>
+            <fieldset>
+              <legend>New business</legend>
+              <div class="row">
+                <div>
+                  <label>Slug (lowercase, a-z 0-9 -)</label>
+                  <input id="nw-slug" placeholder="farm" />
+                </div>
+                <div>
+                  <label>Name</label>
+                  <input id="nw-name" placeholder="Farm" />
+                </div>
+              </div>
+              <label>Line (product line, required — created lazily)</label>
+              <input id="nw-line" placeholder="ops" />
+              <div style="margin-top: 12px"><button class="go" id="nw-create">Create</button></div>
+              <div id="nw-notice"></div>
+            </fieldset>
+            <fieldset>
+              <legend>Runtime — graceful restart</legend>
+              <p class="hint" style="margin-top: 0">biz web snapshots mid-turn sessions every few seconds and auto-resumes them on the next boot — restart the server during a running turn and it picks back up from the worklog. Live sessions right now:</p>
+              <div id="rt-sessions"></div>
+              <div style="margin-top: 10px"><button class="go" id="rt-refresh">Refresh</button></div>
+            </fieldset>
+          </div>
+        </div>
+      </section>
+
+      <!-- Knowledge -->
+      <section id="view-knowledge" class="view">
+        <div class="panel">
+          <div class="wrap">
+            <h1>Knowledge</h1>
+            <p class="hint">Layered, read-only knowledge: <code>common</code> (all businesses) → <code>line</code> (this product line) → <code>business</code> (this one). Files are the source of truth — agents and curators write them, the UI only displays.</p>
+            <div id="k-layers"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Catalog: modules + skills -->
+      <section id="view-catalog" class="view">
+        <div class="panel">
+          <div class="wrap">
+            <h1>Modules &amp; Skills</h1>
+            <p class="hint">Modules: the code components this business is built from (knowledge only — the agent never executes them). Skills: capabilities agents can load on demand. Read-only here; files are the source of truth.</p>
+            <div id="cat-body"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Requirements (multi-session tasks) -->
+      <section id="view-requirements" class="view">
+        <div class="panel">
+          <div class="wrap">
+            <h1>Tasks (requirements)</h1>
+            <p class="hint">A requirement is a multi-session task container: a directory whose <code>requirement.md</code> is the living state doc every session on it shares. Sessions link via a <code>.req</code> marker; their context is injected at launch.</p>
+            <div id="req-list"></div>
+            <fieldset>
+              <legend>New task</legend>
+              <div class="row">
+                <div><label>Id (short slug)</label><input id="rq-id" placeholder="q3-uplift" /></div>
+                <div><label>Title</label><input id="rq-title" placeholder="Q3 uplift analysis" /></div>
+              </div>
+              <label>Goal (human-owned — the agent won't rewrite a filled goal)</label>
+              <textarea id="rq-goal" placeholder="What should be true when this is done…"></textarea>
+              <div style="margin-top: 12px"><button class="go" id="rq-create">Create</button></div>
+              <div id="rq-notice"></div>
+            </fieldset>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+      // ── state ──
+      let ws = null; // current business slug
+      let sessionId = null;
+      let es = null;
+      let assistantEl = null;
+      let acc = ""; // accumulated assistant text for the in-flight turn
+      let sawDelta = false; // did this turn stream token deltas? if so, ignore the final full message (already shown)
+      let jobEls = {}; // ticket -> the card element, so open→done updates in place
+      let blockSeq = 0;
+
+      if (window.mermaid) mermaid.initialize({ startOnLoad: false, theme: "neutral" });
+
+      // ── rich rendering (all guarded so it degrades when a CDN didn't load) ──
+      function renderMarkdown(el, text) {
+        if (window.marked) {
+          el.innerHTML = marked.parse(text, { gfm: true, breaks: true });
+          if (window.hljs)
+            el.querySelectorAll("pre code").forEach((c) => {
+              if (!/language-(mermaid|chart)/.test(c.className)) hljs.highlightElement(c);
+            });
+        } else {
+          el.innerHTML = "<pre>" + esc(text) + "</pre>"; // offline fallback
+        }
+      }
+
+      // Upgrade ```mermaid and ```chart fenced blocks into diagrams/charts. Run once a turn is
+      // done (not mid-stream) so a half-streamed spec never throws. Each block is isolated:
+      // a bad spec shows an inline error instead of breaking the whole message.
+      async function upgradeBlocks(el) {
+        for (const code of el.querySelectorAll("code.language-mermaid")) {
+          const pre = code.closest("pre");
+          try {
+            if (!window.mermaid) throw new Error("mermaid not loaded");
+            const { svg } = await mermaid.render("mmd" + blockSeq++, code.textContent);
+            const div = document.createElement("div");
+            div.innerHTML = svg;
+            pre.replaceWith(div);
+          } catch (e) {
+            pre.outerHTML = '<div class="notice err">mermaid: ' + esc(String(e.message || e)) + "</div>";
+          }
+        }
+        for (const code of el.querySelectorAll("code.language-chart")) {
+          const pre = code.closest("pre");
+          try {
+            if (!window.echarts) throw new Error("echarts not loaded");
+            const spec = JSON.parse(code.textContent);
+            const div = document.createElement("div");
+            div.className = "chart";
+            pre.replaceWith(div);
+            echarts.init(div).setOption(spec);
+          } catch (e) {
+            pre.outerHTML = '<div class="notice err">chart: ' + esc(String(e.message || e)) + "</div>";
+          }
+        }
+      }
+
+      // ── chat ──
+      function add(cls, text) {
+        const p = document.createElement("p");
+        p.className = "msg " + cls;
+        p.textContent = text;
+        $("#log").appendChild(p);
+        $("#log").scrollTop = $("#log").scrollHeight;
+        return p;
+      }
+
+      function setEnabled(on) {
+        $("#i").disabled = !on;
+        $("#b").disabled = !on;
+        if (on) $("#i").focus();
+      }
+
+      // Compact one-line preview of a tool's input args (objects -> JSON, whitespace collapsed).
+      function oneLine(v, max) {
+        let s;
+        try {
+          s = typeof v === "string" ? v : JSON.stringify(v);
+        } catch {
+          s = String(v);
+        }
+        s = (s || "").replace(/\s+/g, " ").trim();
+        return s.length > max ? s.slice(0, max) + "…" : s;
+      }
+
+      // Render the cumulative usage/cost badge from a `usage` event (or /api/sessions).
+      function showUsage(u) {
+        const parts = [];
+        if (typeof u.costUsd === "number") parts.push("$" + u.costUsd.toFixed(4));
+        const tok = (u.inputTokens || 0) + (u.outputTokens || 0);
+        if (tok) parts.push(tok.toLocaleString() + " tok");
+        if (u.numTurns) parts.push(u.numTurns + " turns");
+        $("#usage").textContent = parts.length ? "· " + parts.join(" · ") : "";
+      }
+
+      function ensureAssistant() {
+        if (!assistantEl) {
+          assistantEl = document.createElement("div");
+          assistantEl.className = "msg assistant";
+          $("#log").appendChild(assistantEl);
+          acc = "";
+        }
+        return assistantEl;
+      }
+
+      function onEvent(ev) {
+        const log = $("#log");
+        switch (ev.type) {
+          case "delta": // token-level streaming — the live "typing" path
+            if (ev.thinking) break; // skip internal reasoning in this minimal viewer
+            ensureAssistant();
+            sawDelta = true;
+            acc += ev.text;
+            renderMarkdown(assistantEl, acc);
+            log.scrollTop = log.scrollHeight;
+            break;
+          case "message":
+            ensureAssistant();
+            // If we streamed this turn via deltas, the full message just repeats it — don't double it.
+            // (A late-joining tab gets no deltas, so it still renders the full message here.)
+            if (sawDelta) break;
+            acc += ev.text;
+            renderMarkdown(assistantEl, acc);
+            log.scrollTop = log.scrollHeight;
+            break;
+          case "tool": {
+            // Observability: show the call args on start and a collapsible result on end.
+            const head = (ev.phase === "start" ? "🔧 " : "✓ ") + (ev.name || "tool");
+            const p = add("tool", "");
+            const h = document.createElement("span");
+            h.textContent = head;
+            p.appendChild(h);
+            if (ev.phase === "start" && ev.input !== undefined) {
+              const a = document.createElement("span");
+              a.className = "arg";
+              a.textContent = " " + oneLine(ev.input, 120);
+              p.appendChild(a);
+            }
+            if (ev.phase === "end" && typeof ev.result === "string" && ev.result) {
+              const d = document.createElement("details");
+              const s = document.createElement("summary");
+              s.textContent = ev.isError ? " result (error)" : " result";
+              const pre = document.createElement("pre");
+              pre.textContent = ev.result;
+              d.appendChild(s);
+              d.appendChild(pre);
+              p.appendChild(d);
+            }
+            $("#log").scrollTop = $("#log").scrollHeight;
+            break;
+          }
+          case "usage":
+            showUsage(ev);
+            break;
+          case "worklog": {
+            const live = $("#wl-live");
+            live.className = "";
+            live.textContent = ev.content;
+            break;
+          }
+          case "job": {
+            let el = jobEls[ev.ticket];
+            if (!el) {
+              el = add("job", "");
+              jobEls[ev.ticket] = el;
+            }
+            const name = ev.label || ev.ticket;
+            if (ev.status === "open") {
+              el.textContent = "⏳ " + name + " — running, keep chatting ";
+              const btn = document.createElement("button");
+              btn.textContent = "I have the result";
+              btn.onclick = async () => {
+                const result = prompt("Deliver this result into the chat:");
+                if (result == null) return;
+                btn.disabled = true;
+                await fetch("/api/jobs/done?id=" + sessionId + "&ticket=" + encodeURIComponent(ev.ticket), { method: "POST", body: result });
+              };
+              el.appendChild(btn);
+            } else if (ev.status === "done") {
+              el.textContent = "✅ " + name + " — done";
+            } else {
+              el.textContent = "✗ " + name + " — failed";
+            }
+            $("#log").scrollTop = $("#log").scrollHeight;
+            break;
+          }
+          case "idle":
+            if (assistantEl) upgradeBlocks(assistantEl);
+            assistantEl = null;
+            sawDelta = false;
+            setEnabled(true);
+            break;
+          case "error":
+            add("error", "⚠ " + ev.message);
+            break;
+          case "closed":
+            add("sys", "— session closed —");
+            setEnabled(false);
+            break;
+        }
+      }
+
+      async function openSession(slug, resume) {
+        if (es) es.close();
+        $("#log").innerHTML = "";
+        $("#wl-live").className = "empty";
+        $("#wl-live").textContent = "— not written yet —";
+        assistantEl = null;
+        sawDelta = false;
+        jobEls = {};
+        $("#usage").textContent = "";
+        $("#status").textContent = resume ? "resuming…" : "starting…";
+        const sp = new URLSearchParams({ business: slug });
+        if (resume) {
+          sp.set("claudeSessionId", resume.claudeSessionId);
+          sp.set("runId", resume.runId);
+        }
+        const r = await fetch("/api/start?" + sp.toString(), { method: "POST" });
+        sessionId = (await r.json()).id;
+        if (resume) {
+          // Fold the past turns into the log before attaching the live stream (same backlog the
+          // SDK client replays). The agent already has the full context from the resume itself.
+          const hist = await fetch("/api/businesses/" + slug + "/runs/" + encodeURIComponent(resume.runId) + "/history").then((x) => x.json()).catch(() => []);
+          for (const ev of hist) replayEvent(ev);
+          add("sys", "— resumed; the agent kept the full prior context —");
+        }
+        es = new EventSource("/api/stream?id=" + sessionId);
+        es.onmessage = (e) => onEvent(JSON.parse(e.data));
+        es.onerror = () => es && es.close();
+        $("#status").textContent = slug;
+        setEnabled(true);
+        loadSessions(slug);
+      }
+
+      $("#f").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = $("#i").value.trim();
+        if (!text || !sessionId) return;
+        add("user", text);
+        $("#i").value = "";
+        setEnabled(false);
+        await fetch("/api/send?id=" + sessionId, { method: "POST", body: text });
+      });
+
+      $("#new-sess").addEventListener("click", () => {
+        if (ws) openSession(ws); // fresh session, no resume
+      });
+
+      // ── session rail: list resumable past sessions, replay one on click ──
+      async function loadSessions(slug) {
+        const box = $("#sess-list");
+        const runs = await fetch("/api/businesses/" + slug + "/runs").then((x) => x.json()).catch(() => []);
+        const resumable = runs.filter((r) => r.claudeSessionId);
+        box.innerHTML = resumable.length ? "" : '<p class="hint" style="margin: 0 0 10px">— no past sessions yet —</p>';
+        for (const run of resumable) {
+          const item = document.createElement("div");
+          item.className = "wl-item";
+          item.innerHTML =
+            '<div class="desc">' + esc(run.description || "(untitled)") + "</div>" +
+            '<div class="meta">' + esc(run.date || run.runId) + (run.req ? " · " + esc(run.req) : "") + "</div>";
+          item.addEventListener("click", () => openSession(slug, { claudeSessionId: run.claudeSessionId, runId: run.runId }));
+          box.appendChild(item);
+        }
+      }
+
+      // Render one backlog SessionEvent on resume. Past user turns carry role:"user"; assistant
+      // turns each get their own bubble (a backlog has no token deltas, so every message is whole).
+      function replayEvent(ev) {
+        switch (ev.type) {
+          case "message": {
+            if (ev.role === "user") { assistantEl = null; add("user", ev.text); break; }
+            assistantEl = null;
+            const el = document.createElement("div");
+            el.className = "msg assistant";
+            renderMarkdown(el, ev.text);
+            $("#log").appendChild(el);
+            upgradeBlocks(el);
+            break;
+          }
+          case "tool":
+          case "job":
+          case "worklog":
+          case "usage":
+            onEvent(ev);
+            break;
+          // skipped in a backlog replay: session / delta / idle / error / closed
+        }
+      }
+
+      // ── memory view ──
+      async function loadMemory() {
+        if (!ws) return;
+        const q = new URLSearchParams();
+        if ($("#m-query").value.trim()) q.set("query", $("#m-query").value.trim());
+        const list = await (await fetch("/api/businesses/" + ws + "/memory?" + q)).json();
+        const box = $("#m-list");
+        box.innerHTML = list.length ? "" : '<p class="hint">No matching memory.</p>';
+        for (const r of list) {
+          const card = document.createElement("div");
+          card.className = "card";
+          const chips = '<span class="chip scope">' + esc(r.scope) + "</span>";
+          card.innerHTML =
+            (r.confidence != null ? '<span class="conf">confidence ' + r.confidence + "</span>" : "") +
+            '<div class="chips">' + chips + "</div>" +
+            "<div>" + esc(r.body) + "</div>";
+          box.appendChild(card);
+        }
+      }
+
+      $("#m-search").addEventListener("click", loadMemory);
+      $("#m-add").addEventListener("click", async () => {
+        const notice = $("#m-notice");
+        notice.innerHTML = "";
+        const body = $("#m-body").value.trim();
+        const r = await fetch("/api/businesses/" + ws + "/memory", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ body }),
+        });
+        if (r.ok) {
+          $("#m-body").value = "";
+          notice.innerHTML = '<div class="notice ok">Saved.</div>';
+          loadMemory();
+        } else {
+          const err = (await r.json().catch(() => ({}))).error || "failed";
+          notice.innerHTML = '<div class="notice err">' + esc(err) + "</div>";
+        }
+      });
+
+      // ── info view ──
+      async function loadInfo() {
+        if (!ws) return;
+        const m = await (await fetch("/api/businesses/" + ws)).json();
+        $("#info-name").textContent = m.name;
+        const rows = [
+          ["slug", m.slug],
+          ["line", m.line || "—"],
+          ["domain", m.domain || "—"],
+          ["modules", (m.modules || []).join(", ") || "—"],
+          ["created", m.createdAt],
+          ["updated", m.updatedAt],
+        ];
+        $("#info-kv").innerHTML = rows
+          .map(([k, v]) => '<div class="k">' + k + '</div><div>' + esc(String(v)) + "</div>")
+          .join("");
+        $("#ctx").style.display = "none";
+        $("#ctx").textContent = "";
+        loadRuntime();
+      }
+
+      async function loadRuntime() {
+        const box = $("#rt-sessions");
+        const sess = await fetch("/api/sessions").then((r) => r.json()).catch(() => []);
+        box.innerHTML = sess.length ? "" : '<p class="hint" style="margin: 0">— no live sessions —</p>';
+        for (const s of sess) {
+          const busy = s.busy ? '<span class="chip" style="background:#fef3c7;color:#b45309">busy</span>' : '<span class="chip">idle</span>';
+          box.innerHTML += '<div class="card"><div><b>' + esc(s.business || "?") + "</b> " + busy + '</div><div class="meta">' + esc(s.claudeSessionId || s.id || "") + "</div></div>";
+        }
+      }
+
+      $("#ctx-load").addEventListener("click", async () => {
+        const ctx = await (await fetch("/api/businesses/" + ws + "/context")).text();
+        $("#ctx").textContent = ctx;
+        $("#ctx").style.display = "block";
+      });
+
+      $("#rt-refresh").addEventListener("click", loadRuntime);
+
+      $("#nw-create").addEventListener("click", async () => {
+        const notice = $("#nw-notice");
+        notice.innerHTML = "";
+        const slug = $("#nw-slug").value.trim();
+        const name = $("#nw-name").value.trim() || undefined;
+        const line = $("#nw-line").value.trim();
+        const r = await fetch("/api/businesses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ slug, name, line }),
+        });
+        if (r.ok) {
+          notice.innerHTML = '<div class="notice ok">Created “' + esc(slug) + '”.</div>';
+          $("#nw-slug").value = $("#nw-name").value = $("#nw-line").value = "";
+          await loadBusinesses(slug); // refresh picker, select the new one
+        } else {
+          const err = (await r.json().catch(() => ({}))).error || "failed";
+          notice.innerHTML = '<div class="notice err">' + esc(err) + "</div>";
+        }
+      });
+
+      // ── knowledge view ──
+      async function loadKnowledge() {
+        if (!ws) return;
+        const box = $("#k-layers");
+        box.innerHTML = '<p class="hint">Loading…</p>';
+        let layers;
+        try {
+          layers = await (await fetch("/api/businesses/" + ws + "/knowledge")).json();
+        } catch {
+          box.innerHTML = '<p class="hint">Failed to load knowledge.</p>';
+          return;
+        }
+        box.innerHTML = "";
+        if (!layers.length || !layers.some((l) => l.files.length)) {
+          box.innerHTML = '<p class="hint">No knowledge files yet. Agents write these as they work; curators seed the shared layers.</p>';
+          return;
+        }
+        for (const layer of layers) {
+          if (!layer.files.length) continue;
+          const h = document.createElement("h2");
+          h.className = "layer-h";
+          h.textContent = layer.layer + " · " + layer.name + " (" + layer.files.length + ")";
+          box.appendChild(h);
+          for (const f of layer.files) {
+            const card = document.createElement("div");
+            card.className = "card clickable";
+            card.innerHTML =
+              "<div><b>" + esc(f.path) + "</b></div>" +
+              (f.description ? "<div>" + esc(f.description) + "</div>" : "") +
+              '<div class="meta">' + f.size + " bytes</div>";
+            card.addEventListener("click", async () => {
+              const open = card.querySelector("pre");
+              if (open) return open.remove(); // toggle off
+              const content = await (await fetch("/api/businesses/" + ws + "/knowledge/file?layer=" + encodeURIComponent(layer.layer) + "&path=" + encodeURIComponent(f.path))).text();
+              const pre = document.createElement("pre");
+              pre.className = "filebody";
+              pre.textContent = content;
+              card.appendChild(pre);
+            });
+            box.appendChild(card);
+          }
+        }
+      }
+
+      // ── catalog (modules + skills) view ──
+      async function loadCatalog() {
+        if (!ws) return;
+        const box = $("#cat-body");
+        box.innerHTML = '<p class="hint">Loading…</p>';
+        const [mods, skills] = await Promise.all([
+          fetch("/api/businesses/" + ws + "/modules").then((r) => r.json()).catch(() => []),
+          fetch("/api/skills").then((r) => r.json()).catch(() => []),
+        ]);
+        let html = '<h2 class="layer-h">Modules (' + mods.length + ")</h2>";
+        if (!mods.length) html += '<p class="hint">No modules linked. Register + link with <code>biz module new</code> then <code>biz link</code>.</p>';
+        for (const m of mods) {
+          const st = m.status ? [m.status.codeReady ? "code ✓" : "code —", m.status.claudeMd ? "knowledge ✓" : null].filter(Boolean).join(" · ") : "";
+          html +=
+            '<div class="card"><div><b>' + esc(m.slug) + '</b> <span class="chip">' + esc(m.type || "?") + "</span></div>" +
+            (m.source ? '<div class="meta">' + esc(m.source) + "</div>" : "") +
+            (st ? '<div class="meta">' + st + "</div>" : "") +
+            "</div>";
+        }
+        html += '<h2 class="layer-h">Skills (' + skills.length + ")</h2>";
+        if (!skills.length) html += '<p class="hint">No skills installed (drop a skill dir under <code>.claude/skills/</code>).</p>';
+        for (const s of skills) {
+          html +=
+            '<div class="card"><div><b>' + esc(s.name || s.id) + '</b> <span class="meta">' + (s.fileCount || 0) + " files</span></div>" +
+            (s.description ? "<div>" + esc(s.description) + "</div>" : "") +
+            "</div>";
+        }
+        box.innerHTML = html;
+      }
+
+      // ── requirements (multi-session tasks) view ──
+      async function loadRequirements() {
+        if (!ws) return;
+        const box = $("#req-list");
+        box.innerHTML = '<p class="hint">Loading…</p>';
+        const list = await (await fetch("/api/businesses/" + ws + "/requirements")).json();
+        box.innerHTML = list.length ? "" : '<p class="hint">No tasks yet. Create one below, or start a session under one with <code>biz run --req</code>.</p>';
+        for (const r of list) {
+          const card = document.createElement("div");
+          card.className = "card clickable";
+          card.innerHTML =
+            "<div><b>" + esc(r.title || r.id) + '</b> <span class="chip scope">' + esc(r.status) + "</span></div>" +
+            '<div class="meta">' + esc(r.id) + (r.updatedAt ? " · " + r.updatedAt.slice(0, 10) : "") + "</div>";
+          card.addEventListener("click", async () => {
+            const open = card.querySelector(".req-detail");
+            if (open) return open.remove();
+            const detail = document.createElement("div");
+            detail.className = "req-detail";
+            const [doc, runs] = await Promise.all([
+              fetch("/api/businesses/" + ws + "/requirements/" + encodeURIComponent(r.id)).then((x) => x.text()).catch(() => ""),
+              fetch("/api/businesses/" + ws + "/runs").then((x) => x.json()).catch(() => []),
+            ]);
+            const docEl = document.createElement("div");
+            docEl.className = "filebody";
+            renderMarkdown(docEl, doc.trim() || "_(no state document yet — it grows as sessions work on this task)_");
+            detail.appendChild(docEl);
+            const mine = runs.filter((x) => x.req === r.id);
+            const sline = document.createElement("div");
+            sline.className = "meta";
+            sline.style.marginTop = "8px";
+            sline.textContent = mine.length ? mine.length + " session(s) on this task: " + mine.map((x) => x.runId).join(", ") : "no sessions yet";
+            detail.appendChild(sline);
+            card.appendChild(detail);
+          });
+          box.appendChild(card);
+        }
+      }
+
+      $("#rq-create").addEventListener("click", async () => {
+        const notice = $("#rq-notice");
+        notice.innerHTML = "";
+        const id = $("#rq-id").value.trim();
+        const title = $("#rq-title").value.trim() || undefined;
+        const goal = $("#rq-goal").value.trim() || undefined;
+        const r = await fetch("/api/businesses/" + ws + "/requirements", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id, goal, title }),
+        });
+        if (r.ok) {
+          $("#rq-id").value = $("#rq-title").value = $("#rq-goal").value = "";
+          notice.innerHTML = '<div class="notice ok">Created.</div>';
+          loadRequirements();
+        } else {
+          const err = (await r.json().catch(() => ({}))).error || "failed";
+          notice.innerHTML = '<div class="notice err">' + esc(err) + "</div>";
+        }
+      });
+
+      // ── view switching ──
+      let view = "chat";
+      function showView(name) {
+        view = name;
+        document.querySelectorAll("header nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+        document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + name));
+        if (name === "memory") loadMemory();
+        if (name === "knowledge") loadKnowledge();
+        if (name === "catalog") loadCatalog();
+        if (name === "requirements") loadRequirements();
+        if (name === "info") loadInfo();
+      }
+      document.querySelectorAll("header nav button").forEach((b) =>
+        b.addEventListener("click", () => showView(b.dataset.view)),
+      );
+
+      // ── business selection ──
+      function selectBusiness(slug) {
+        ws = slug;
+        openSession(slug); // a fresh session on switch; the rail lists resumable past ones
+        if (view !== "chat") showView(view); // refresh the open tab for the new business
+      }
+      $("#ws").addEventListener("change", () => selectBusiness($("#ws").value));
+
+      async function loadBusinesses(select) {
+        const list = await (await fetch("/api/businesses")).json();
+        const sel = $("#ws");
+        sel.innerHTML = "";
+        if (!list.length) {
+          $("#status").textContent = "no businesses — create one in the Info tab, or `biz new <slug>`";
+          showView("info");
+          return;
+        }
+        for (const w of list) {
+          const opt = document.createElement("option");
+          opt.value = w.slug;
+          opt.textContent = w.name + " (" + w.slug + ")";
+          sel.appendChild(opt);
+        }
+        const pick = list.some((w) => w.slug === select) ? select : list[0].slug;
+        sel.value = pick;
+        selectBusiness(pick);
+      }
+
+      loadBusinesses();
+    </script>
+  </body>
+</html>

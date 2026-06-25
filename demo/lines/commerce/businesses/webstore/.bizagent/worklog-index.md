@@ -1,0 +1,2 @@
+- 2026-06-04 · User only said hello ("hi"); no task posed yet → no business output · 20260604-200005-d447f4ea
+- 2026-06-09 · User only said hello ("hello"); no task posed yet → no business output · 20260609-174318-b54368cb

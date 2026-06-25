@@ -1,0 +1,60 @@
+{
+  "name": "bizagent",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "BizAgent — business-scoped memory harness for Claude Code CLI and Agent SDK.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/phonism/bizagent.git" },
+  "homepage": "https://github.com/phonism/bizagent#readme",
+  "bugs": { "url": "https://github.com/phonism/bizagent/issues" },
+  "bin": {
+    "biz": "dist/biz.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "import": "./dist/client.mjs",
+      "default": "./dist/client.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "prompts",
+    "web",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "prepare": "node build.mjs",
+    "biz": "tsx src/cli.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "sandbox": "bash examples/quickstart.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "*",
+    "zod": "*"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  }
+}

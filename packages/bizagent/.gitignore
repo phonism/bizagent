@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+examples/sandbox/
+
+# web demo throwaway org
+examples/web/demo-org/

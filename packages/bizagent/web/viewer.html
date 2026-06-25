@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BizAgent · live view</title>
+    <!-- A read-only mirror of a `biz run` session: you drive Claude Code in the terminal; this
+         renders the conversation's ```chart / ```mermaid / tables live by tailing the session
+         transcript. Rich libs load from CDN and are all optional — offline, fences degrade to
+         their raw text and the mirror still works. (Vendor them into web/ for air-gapped use.) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; color: #1a1a1a; background: #fafafa; }
+      a { color: #0a6; }
+      header {
+        position: sticky; top: 0; display: flex; align-items: center; gap: 10px;
+        padding: 10px 18px; background: #111; color: #fff; font-size: 13px;
+      }
+      header b { font-weight: 600; }
+      header .run { opacity: 0.55; font-family: ui-monospace, monospace; }
+      header .status { margin-left: auto; opacity: 0.7; }
+      header .status.live::before { content: "● "; color: #4ade80; }
+      header .status.gone::before { content: "● "; color: #f87171; }
+
+      main { max-width: 860px; margin: 0 auto; padding: 24px 20px 64px; }
+      .msg { margin: 0 0 18px; word-break: break-word; }
+      .msg.user {
+        background: #eef6f1; border-left: 3px solid #0a6; padding: 8px 12px; border-radius: 6px;
+        white-space: pre-wrap; color: #134; font-weight: 500;
+      }
+      .msg.tool { color: #aaa; font-size: 12px; font-family: ui-monospace, monospace; margin-bottom: 8px; }
+      .msg.note { color: #bbb; font-size: 13px; text-align: center; margin: 24px 0; }
+      .msg.assistant > :first-child { margin-top: 0; }
+      .msg.assistant > :last-child { margin-bottom: 0; }
+      .msg.assistant pre { background: #f6f8fa; padding: 12px; border-radius: 8px; overflow-x: auto; }
+      .msg.assistant code { font-family: ui-monospace, monospace; font-size: 13px; }
+      .msg.assistant :not(pre) > code { background: #eef0f2; padding: 1px 5px; border-radius: 4px; }
+      .msg.assistant table { border-collapse: collapse; margin: 8px 0; }
+      .msg.assistant th, .msg.assistant td { border: 1px solid #ddd; padding: 5px 10px; }
+      .msg.assistant blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid #e0e0e0; color: #555; }
+      .chart { height: 340px; margin: 10px 0; background: #fff; border: 1px solid #eee; border-radius: 8px; }
+      .render-err { font-size: 13px; padding: 8px 12px; border-radius: 8px; background: #fdecec; color: #c00; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <b>BizAgent</b><span>live view</span>
+      <span class="run" id="run">—</span>
+      <span class="status" id="status">connecting…</span>
+    </header>
+    <main id="log"></main>
+
+    <script>
+      const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+      const log = document.getElementById("log");
+      // Path is /run/<slug>/<runId> — derive the SSE endpoint and a label from it.
+      const m = location.pathname.match(/^\/run\/([^/]+)\/(.+)$/) || [];
+      const slug = decodeURIComponent(m[1] || "");
+      const runId = decodeURIComponent(m[2] || "");
+      document.getElementById("run").textContent = slug + (runId ? " · " + runId : "");
+
+      if (window.mermaid) mermaid.initialize({ startOnLoad: false, theme: "neutral" });
+      let seq = 0;
+
+      function setStatus(text, cls) {
+        const el = document.getElementById("status");
+        el.textContent = text;
+        el.className = "status" + (cls ? " " + cls : "");
+      }
+      const atBottom = () => window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+      function append(el) {
+        const stick = atBottom();
+        log.appendChild(el);
+        if (stick) window.scrollTo(0, document.body.scrollHeight);
+      }
+
+      // Render one COMPLETE assistant message (each transcript line is a whole message, not a
+      // token stream), then upgrade its fences immediately — nothing here is half-written.
+      function renderAssistant(text) {
+        const el = document.createElement("div");
+        el.className = "msg assistant";
+        if (window.marked) el.innerHTML = marked.parse(text, { gfm: true, breaks: true });
+        else el.innerHTML = "<pre>" + esc(text) + "</pre>";
+        upgradeBlocks(el);
+        append(el);
+      }
+
+      // ```mermaid -> diagram, ```chart -> echarts. Each block isolated: a bad spec shows an
+      // inline error instead of breaking the message. Guarded so it degrades when a CDN is absent.
+      async function upgradeBlocks(el) {
+        for (const code of el.querySelectorAll("code.language-mermaid")) {
+          const pre = code.closest("pre");
+          try {
+            if (!window.mermaid) throw new Error("mermaid not loaded");
+            const { svg } = await mermaid.render("mmd" + seq++, code.textContent);
+            const div = document.createElement("div");
+            div.innerHTML = svg;
+            pre.replaceWith(div);
+          } catch (e) {
+            pre.outerHTML = '<div class="render-err">mermaid: ' + esc(String(e.message || e)) + "</div>";
+          }
+        }
+        for (const code of el.querySelectorAll("code.language-chart")) {
+          const pre = code.closest("pre");
+          try {
+            if (!window.echarts) throw new Error("echarts not loaded");
+            const spec = JSON.parse(code.textContent);
+            const div = document.createElement("div");
+            div.className = "chart";
+            pre.replaceWith(div);
+            echarts.init(div).setOption(spec);
+          } catch (e) {
+            pre.outerHTML = '<div class="render-err">chart: ' + esc(String(e.message || e)) + "</div>";
+          }
+        }
+      }
+
+      function onEvent(ev) {
+        if (ev.type === "message") {
+          if (ev.role === "user") {
+            const el = document.createElement("div");
+            el.className = "msg user";
+            el.textContent = ev.text;
+            append(el);
+          } else {
+            renderAssistant(ev.text);
+          }
+        } else if (ev.type === "tool" && ev.phase === "start") {
+          const el = document.createElement("div");
+          el.className = "msg tool";
+          el.textContent = "🔧 " + (ev.name || "tool");
+          append(el);
+        }
+        // tool-end / idle / others: nothing to render in a mirror
+      }
+
+      if (!slug || !runId) {
+        setStatus("bad url", "gone");
+      } else {
+        const es = new EventSource("/api/run/" + encodeURIComponent(slug) + "/" + encodeURIComponent(runId) + "/stream");
+        es.onopen = () => setStatus("live", "live");
+        es.onmessage = (e) => {
+          try { onEvent(JSON.parse(e.data)); } catch {}
+        };
+        es.onerror = () => setStatus("disconnected", "gone");
+      }
+    </script>
+  </body>
+</html>

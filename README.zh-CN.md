@@ -1,139 +1,210 @@
 # BizAgent
 
-**BizAgent 的开放规范——面向跨职能业务团队的 AI Agent 平台品类。**
-**基于规范快速搭出你自己的 BizAgent，再按你的行业、业务线、工作流去特化。**
+面向 Claude Code CLI 与 Agent SDK 的业务记忆与运行时 harness。
 
-> *Code Agent 给开发者；BizAgent 给业务团队。*
+> Claude Code 的上下文边界通常是一个代码仓库。BizAgent 的上下文边界是一个业务：
+> 产品线、共享模块、长期 worklog、可复用业务记忆。
 
-[![Spec Status](https://img.shields.io/badge/spec-Draft%20v0.1-orange)](./SPEC.zh-CN.md)
-[![License: CC BY 4.0](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](./LICENSE)
-
-**语言**：[English](./README.md) · [**中文**](./README.zh-CN.md)
-
----
+**语言**：[English](./README.md) | [中文](./README.zh-CN.md)
 
 ## 这是什么
 
-AI Agent 正在分工。开发者拿到了 **Code Agent**（Claude Code、Cursor、Devin）。浏览器自动化有 **Web Agent**（Operator、Computer Use）。但**跨职能业务团队**——一起负责一条业务线的数据分析师、PM、工程师、运营——还没有为他们做的 agent。
+BizAgent 给 agent runtime 外面包了一层业务团队反复使用所需的底座：
 
-**BizAgent** 来填这个空：为业务团队定制的 AI Agent 平台。不是 chatbot、不是框架，而是一个**持续运转的工作场**——业务团队与一支自主 Agent 队伍共享同一个 workspace，围绕同一条业务线协作。
+- 产品线是实体目录，每条线装自己的业务和共享模块。
+- 业务记忆以 frontmatter Markdown 记录在 `memory/` 下。
+- 每次 session 的 worklog 写在 `.bizagent/deliverables/<runId>/worklog.md`。
+- 通过 Claude Code / SDK hooks 做记忆写入治理与 worklog 强制。
+- 支持跨 session、可选跨用户共享上下文。
+- CLI、Agent SDK、内置 web 平台共用同一套 core 实现。
 
-本仓库是 BizAgent 品类的 **开放规范**。基于它，任何团队都能：
+本仓库包含可运行的 BizAgent 实现。
 
-- ✅ **快速搭起一个 BizAgent**——规范定义了平台的数据模型、记忆层、监控引擎、适配器契约。不用从地基重新造。
-- ✅ **按你的业务做特化**——你的行业垂直（电商 / 广告 / SaaS / 金融 / 游戏 / …）、你的指标、你的技能都叠在规范之上，不用分叉一份。
-- ✅ **保持可互通**——基于一种符合规范的 BizAgent 搭的 workspace，可以导出并在另一种实现上跑起来，类似 OpenAPI 定义在工具链之间流转。
+## 当前能力
 
-按规范搭出的 BizAgent，自带两个核心能力：
+- `biz init` 创建根目录；`biz line new` 创建产品线（首次使用也会惰性创建）。
+- `biz new <slug> --line <line>` 在线内创建业务，物化共享知识 symlink 与 hook 接线。
+- `biz module new --line` / `biz link` 建模线内共享技术模块（模块永不跨线）。
+- `biz setup <slug>` 引导式初始化：对话补业务画像、登记模块、冷启动知识库。
+- `biz mem add/list` 写入和检索业务记忆，并走治理校验。
+- `biz run` 在业务内启动 Claude Code，并注入完整 system prompt。
+- `biz run --view` 打开终端会话的只读浏览器镜像。
+- `biz web` 启动内置 HTTP/SSE web 平台。
+- Agent SDK helper 用进程内方式接入同一套上下文和 hooks。
+- Remote sharing 支持 `file`、固定契约 `http`、自定义 `module` 三档。
 
-1. **长期记忆**——Agent 跨 session 积累、检索、更新业务知识，团队不用每次新任务都从零讲业务上下文。
-2. **异常监控 + 异步根因调查**——Agent 主动发现业务指标异常，跨多轮异步查询追到根因，不是发一条群告警就结束。
+当前没有实现：指标异常监控、SQLite 真正 SOT、MCP 检索、embedding、生产级多租户平台服务。
 
-## 核心 harness
+## 安装
 
-搭一个 BizAgent，不是把 LLM 接个 prompt 就行。难的是 **harness**——围绕 agent 让它在业务场景里真正能跑下去的底子：跨 session 的持久记忆、主动监控、长任务的异步恢复、平台和本地模式之间按作用域分层的同步。大多数团队每次都得从头造一遍。
-
-我们跑了半年生产，沉淀出这套写法。分两块：
-
-### 1. 记忆 harness
-
-记忆 harness 主要靠两件事：**4 层分层** 与 **worklog 当一等公民**。
-
-**4 层记忆**：知识按 4 个作用域分层，每层有自己的生命周期与可写性：
-
-| 层 | 这里放什么 | 可写性 |
-|---|---|---|
-| **Common** | 跨业务的通用方法、playbook（KPI 词汇表、事件复盘模板） | Curator |
-| **Domain** | 按业务领域共享的概念（电商 GMV 定义、广告归因模型） | Curator |
-| **Business** | 单 workspace 的业务知识（这条业务线的领域模型、踩坑、提炼出的结论） | Agent + 人 |
-| **Session** | 单 session 的 worklog + deliverables——一次任务的执行轨迹 | Agent（追加） |
-
-Agent 一次看到 4 层。这样切的好处：业务特化（你的领域、你的业务）叠在规范之上——不用 fork。
-
-**Worklog 当一等公民**：每个 session 写一份 `worklog.md`——frontmatter（title / description / 时间戳）加 Markdown 正文，记录 plan、决策、发现、confusions。Worklog 通过 CLI（agent 每次有意义的更新就调）push 到 DB，文件系统 watcher 兜底。它们沉淀成**长期过程记忆**，下个 session 可以 `grep`；也是 **Consolidation**（定时跑，把 worklog 里反复出现的模式提炼到 Business 知识层）的源数据。
-
-（完整数据模型、同步 API、引擎算法见 [SPEC §2](./SPEC.zh-CN.md#2-记忆子系统)。）
-
-### 2. 监控 harness（Pulse）
-
-> **报警即诊断，而非通知。监控回路应输出根因，不是噪声。**
-
-三抽象：
-
-| 抽象 | 一句话 |
-|---|---|
-| **Definition** | 指标 = `SQL + 阈值 + cron`，完全配置驱动 |
-| **Analysis** | 异常触发 agent 异步多轮调查（不是一次性 LLM 摘要） |
-| **Quality** | 硬性 prompt 约束禁止甩锅句式（"建议查 X" 这种） |
-
-**与现有监控工具对比：**
-
-| 系统 | 报警输出 | 多轮 | 根因约束 |
-|---|---|---|---|
-| Datadog / Grafana | 指标读数 + 阈值 | ✗ | ✗ |
-| Datadog AI Monitoring | + LLM 摘要 | 单轮 | 弱 |
-| PagerDuty Ops Cloud | + LLM incident 摘要 | 弱 | 弱 |
-| **BizAgent Pulse** | **+ agent 推出的根因** | **✓ 异步多轮** | **✓ 硬性约束** |
-
-## 状态
-
-| | |
-|---|---|
-| 规范 | **Draft v0.1**（2026-05-25） |
-| 参考实现 | 进行中（独立发布） |
-| 采用者 | 欢迎 PR |
-
-草案期会随社区反馈做不兼容改动。等至少两个独立实现跑起来，再切 `v1.0`。
-
-## 如何使用规范
-
-[**SPEC.zh-CN.md**](./SPEC.zh-CN.md) 是写给 **Code Agent**（Claude Code、Cursor、Devin 等）看的。预期工作流：
-
-```bash
-# 1. Clone 本仓库（或把 SPEC.md 的 URL 给 agent）
-git clone https://github.com/phonism/bizagent
-cd bizagent
-
-# 2. 在 Claude Code / Cursor / 你选的 agent 里：
-> 读 SPEC.zh-CN.md，按它描述的内容把 BizAgent 平台搭到 ./my-bizagent。
-> 然后跑 §6 的符合性测试。
-
-# 3. 按你的业务做特化（§7）
-> 把公司内的业务平台、数据表、运营工具、业务知识接进来。
+```sh
+cd packages/bizagent
+npm install
+npm run build
+npm link
+biz --help
 ```
 
-每节都给 **schema、API、算法、TypeScript 接口**——足以让 agent 不需要进一步解释就生成可运行的代码。章节地图：
+CLI 默认启动 `claude`。可以用环境变量覆盖 agent 可执行文件：
 
-| 章节 | 规定的内容 |
-|---|---|
-| [§1 项目布局](./SPEC.zh-CN.md#1-项目布局) | Agent 要生成的目录树 |
-| [§2 记忆子系统](./SPEC.zh-CN.md#2-记忆子系统) | SQL DDL · 清单同步 API · Worklog · Knowledge · Recap · Consolidation |
-| [§3 监控（Pulse）](./SPEC.zh-CN.md#3-监控子系统pulse) | 指标 schema · 5 种规则 · 调度 · 原子认领 · 调查流程 |
-| [§4 运行时原语](./SPEC.zh-CN.md#4-运行时原语) | Wakeup 引擎 · Monitor 引擎 |
-| [§5 适配器](./SPEC.zh-CN.md#5-适配器) | AgentRunner / AsyncQuery / Storage 的 TypeScript 接口 |
-| [§6 符合性测试](./SPEC.zh-CN.md#6-符合性测试) | 用来验证 build 的测试 ID |
-| [§7 特化指南](./SPEC.zh-CN.md#7-特化指南) | 怎么把你的行业 / 业务叠在 baseline 之上 |
-| [附录 A：设计原理](./SPEC.zh-CN.md#附录-a设计原理可选阅读) | 关键决策的理由（可选阅读） |
+```sh
+CLAUDE_PATH=/path/to/claude
+BIZ_AGENT_BIN=/path/to/custom-agent
+```
 
-[SPEC.md](./SPEC.md)（英文）与 [SPEC.zh-CN.md](./SPEC.zh-CN.md)（中文）平行维护，1:1 对应。歧义时以英文为准。
+## 快速开始
 
-## 为什么是规范而不是库
+```sh
+biz init ./acme --web
+cd acme
 
-库只能让一种实现变容易。规范让 *每种* 实现之间互通。BizAgent 关注：
+biz new webstore --line commerce         # commerce 线惰性创建
+biz setup webstore                       # 引导式初始化，全程对话
+biz mem add webstore "GMV excludes cancelled orders" --confidence 0.9
+biz mem list webstore
 
-- **跨基础设施可移植**——你的记忆与监控选型不会被某个 agent SDK 或模型绑死。
-- **跨实现可测试**——第五部分的测试矩阵让「符合规范」可被验证，不是自说自话。
+biz run webstore
+# 或：
+cd lines/commerce/businesses/webstore && biz
+```
 
-## 贡献
+启动 web 平台：
 
-欢迎 Issue、PR、讨论。
+```sh
+biz web
+```
 
-- **编辑性修订**（拼写、澄清、补例子）—— 直接 PR。**英文 `SPEC.md` 与中文 `SPEC.zh-CN.md` 在同一 PR 内同步改动。**
-- **语义性变更**（实体形状、协议契约、符合性规则）—— 先开 RFC issue 讨论，再 PR。
-- **新适配器** —— 在 [§5 适配器](./SPEC.zh-CN.md#5-适配器) 下提议。
+预览一次 agent run 会注入的完整上下文：
 
-变更历史见 [CHANGELOG.zh-CN.md](./CHANGELOG.zh-CN.md)。
+```sh
+biz context webstore
+```
+
+## 目录模型
+
+根目录装产品线；产品线装自己的知识层、模块和业务。业务 slug 全局唯一（跨线也不重名），
+所以命令和路由只用 slug。模块永不跨线 link。
+
+```text
+acme/
+├── bizagent.config.json
+├── prompts/
+├── knowledge/
+│   └── common/
+└── lines/
+    └── commerce/
+        ├── knowledge/
+        ├── modules/
+        │   └── backend/
+        │       ├── module.json
+        │       ├── code/
+        │       └── memory/
+        └── businesses/
+            └── webstore/
+                ├── business.json
+                ├── CLAUDE.md
+                ├── .claude/settings.json
+                ├── knowledge/
+                │   ├── business/
+                │   ├── common   -> 根 knowledge/common
+                │   └── commerce -> ../../knowledge
+                ├── modules/
+                │   └── backend -> ../../modules/backend
+                ├── memory/
+                └── .bizagent/
+                    ├── deliverables/<runId>/worklog.md
+                    ├── worklog-index.md
+                    └── remote-memory/
+```
+
+可编辑来源主要是 `memory/`、`knowledge/business/`、模块记忆和可选 prompt 覆盖。
+真正重要的运行规则、业务记忆、历史 session、输出 block 协议、模块上下文和
+worklog 指令由 `buildSystemPrompt` 在启动时组装，不放进 `CLAUDE.md`。
+
+## 记忆与治理
+
+业务记忆是 Markdown 文件：
+
+```markdown
+---
+scope: business
+confidence: 0.9
+writable_by: agent+human
+updated_at: 2026-06-05T00:00:00.000Z
+---
+
+GMV excludes cancelled orders.
+```
+
+hook 层负责治理：
+
+- agent 不能写 curator 层：根 `knowledge/common` 和产品线的 `knowledge/`。
+- business memory 必须是 `.md`，必须有 `scope: business`，正文不能为空。
+- `Write` 和 `Edit` 都按写入后的完整内容校验。
+- 如果当前 run 没写 worklog，Stop 会拦截一次并提醒补写。
+- 完成的 worklog 会索引进 `.bizagent/worklog-index.md`。
+
+`biz mem add` 和 web memory API 使用同一套校验，不是治理后门。
+
+## Remote 共享
+
+Remote sharing 是可选的。每个本地业务仍是自己的真相来源；remote 只是
+尽力而为的共享层，用于同步 worklog 摘要、worklog 正文和 business memory。
+
+```sh
+biz init ./acme --remote file:../hub
+```
+
+支持三档 remote：
+
+- `file`：共享本地目录，适合测试或简单共享存储。
+- `http`：固定 REST 契约，配置 base URL 和 headers。
+- `module`：用户提供 JavaScript factory，返回自定义 Remote 实现。
+
+remote 调用有超时并且 fail open：远端慢或不可用时，不会破坏本地 agent run。
+
+原始会话 transcript 是单独的 opt-in（remote 块加 `"transcripts": true`，它带有文件内容
+和命令输出）：每次 Stop 把会话新增的 transcript 行镜像到 hub，平台 web 据此只读渲染
+对话——远端会话在平台上可看、永不可 resume。
+
+跑着 `biz web` 的部署（或任何挂载 `createBizHandler` 的宿主）同时就是 `http` 契约的服务端：
+`/api/businesses/:slug/hub/*` 在平台活数据上服务 index/worklog/memory/transcript，并提供只读的
+`manifest` + `file` 拉取面（给将来的冷启动 pull）。`remote.url` 支持 `${SLUG}` 插值，
+一份配置覆盖全部业务。
+
+## 开发
+
+```sh
+cd packages/bizagent
+npm test
+npm run typecheck
+npm run build
+npm run biz -- --help
+```
+
+部分 web / HTTP 测试会监听本地端口。在受限 sandbox 里可能报 `listen EPERM`；
+filesystem、governance、runtime-sdk、session、prompt、module、remote 纯逻辑测试不需要监听端口。
+
+## 发布
+
+```sh
+scripts/release.sh --dry-run
+scripts/release.sh --publish
+```
+
+发布脚本从 `packages/bizagent/package.json` 读取版本号，构建并 typecheck，执行
+`npm pack --dry-run`。在 `--publish` 模式下，它会提交当前改动，创建
+`bizagent-v<version>` tag，推送 `main` 和 tag，然后执行 `npm publish --access public`。
+
+发布前先确认 `npm whoami` 正常。如果受限 sandbox 里本地端口测试失败，应在正常开发机发布，
+或明确传 `--skip-tests`。
+
+## 文档
+
+- [packages/bizagent/README.md](./packages/bizagent/README.md)：包级使用说明。
+- [packages/bizagent/docs/design.zh-CN.md](./packages/bizagent/docs/design.zh-CN.md)：
+  与实现同步维护的设计文档。
 
 ## 许可
 
-本规范采用 [CC BY 4.0](./LICENSE)——可自由分享与改编，包括商用，需署名。
+基于 [Apache-2.0](./LICENSE) 授权。

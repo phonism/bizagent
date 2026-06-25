@@ -3,5 +3,12 @@ node_modules/
 .env
 .env.local
 *.log
+.npm-cache/
 .vscode/
 .idea/
+drafts/
+
+# internal-only, never publish: the parked git dir (see the host repo's conventions)
+# and the internal planning list. Both stay tracked in the internal monorepo.
+.git-standalone/
+TODO.md
