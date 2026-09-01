@@ -7,6 +7,16 @@
 
 **语言**：[English](./README.md) | [中文](./README.zh-CN.md)
 
+## 选择运行时
+
+本仓库包含两套互补实现，请按你正在使用的 agent runtime 选择：
+
+- [`packages/bizagent`](./packages/bizagent/README.md)：面向 Claude Code CLI 与 Claude Agent SDK
+  的业务记忆和运行时 harness；本页后续内容描述的是这个包。
+- [`packages/dsh`](./packages/dsh/README.md)：面向 DeepSeek Harness（DSH）的插件，提供稳定的
+  Agent Home、多级记忆、有证据的学习、受治理的跨 Agent 提案和记忆 UI。可直接从
+  [快速上手](./packages/dsh/docs/quickstart.md)开始。
+
 ## 这是什么
 
 BizAgent 给 agent runtime 外面包了一层业务团队反复使用所需的底座：
@@ -204,7 +214,10 @@ scripts/release.sh --publish
 - [packages/bizagent/README.md](./packages/bizagent/README.md)：包级使用说明。
 - [packages/bizagent/docs/design.zh-CN.md](./packages/bizagent/docs/design.zh-CN.md)：
   与实现同步维护的设计文档。
+- [packages/dsh/README.md](./packages/dsh/README.md)：DSH 插件概览、安装和可运行的验证命令。
+- [packages/dsh/docs/quickstart.md](./packages/dsh/docs/quickstart.md)：DSH 端到端安装与使用指南。
 
 ## 许可
 
-基于 [Apache-2.0](./LICENSE) 授权。
+Claude Code / Agent SDK 包基于 [Apache-2.0](./LICENSE) 授权；DSH 插件单独基于
+[MIT](./packages/dsh/LICENSE) 授权。

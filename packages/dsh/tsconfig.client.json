@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "rootDir": "src",
+    "outDir": "lib/client-types",
+    "declaration": true,
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "jsx": "react-jsx",
+    "types": ["node", "react", "react-dom"]
+  },
+  "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "src/ui-contract.ts", "src/domain.ts"]
+}

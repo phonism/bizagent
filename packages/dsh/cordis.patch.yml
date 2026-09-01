@@ -1,0 +1,12 @@
+# BizAgent v0.1 requires the DSH Web profile's ctx.storageDomain service.
+# The row is inserted after the standard bundles and remains user-patchable.
+- insert:
+    - id: bizagent
+      name: '@bizagent/dsh'
+      config:
+        defaultHome: 'personal:default'
+        autoCreateDefaultHome: true
+        identityMaxBytes: 6144
+        indexMaxBytes: 16384
+    - id: bizagent-ui
+      name: '@bizagent/dsh/ui-host'

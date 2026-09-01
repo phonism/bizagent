@@ -7,6 +7,18 @@ Business-scoped memory and runtime harness for Claude Code CLI and Agent SDK.
 
 **Languages**: [English](./README.md) | [中文](./README.zh-CN.md)
 
+## Runtime Packages
+
+This repository contains two complementary implementations. Choose the package for the
+agent runtime you use:
+
+- [`packages/bizagent`](./packages/bizagent/README.md): business-scoped memory and runtime
+  harness for Claude Code CLI and the Claude Agent SDK. The rest of this page describes
+  this package.
+- [`packages/dsh`](./packages/dsh/README.md): a DeepSeek Harness (DSH) plugin with stable
+  Agent Homes, multi-level memory, evidence-backed learning, governed cross-agent
+  proposals, and a memory UI. See its [quick start](./packages/dsh/docs/quickstart.md).
+
 ## What This Is
 
 BizAgent wraps an agent runtime with the pieces a business team needs for repeated
@@ -213,7 +225,12 @@ sandbox, publish from a normal development machine or pass `--skip-tests` delibe
 - [packages/bizagent/README.md](./packages/bizagent/README.md): package-level usage notes.
 - [packages/bizagent/docs/design.zh-CN.md](./packages/bizagent/docs/design.zh-CN.md):
   design document kept in sync with the implementation.
+- [packages/dsh/README.md](./packages/dsh/README.md): DSH plugin overview, install, and
+  runnable verification commands.
+- [packages/dsh/docs/quickstart.md](./packages/dsh/docs/quickstart.md): end-to-end DSH
+  setup and usage guide.
 
 ## License
 
-Licensed under [Apache-2.0](./LICENSE).
+The Claude Code / Agent SDK package is licensed under [Apache-2.0](./LICENSE). The DSH
+plugin is licensed separately under [MIT](./packages/dsh/LICENSE).
