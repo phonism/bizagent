@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { test } from 'node:test'
 import { HomeStore } from '../lib/home-store.js'
+import { makeTempDir } from './temp-dir.mjs'
 
 test('HomeStore persists index-first memory and revisions across reloads', async (t) => {
-  const root = await mkdtemp('/private/tmp/bizagent-home-store-')
+  const root = await makeTempDir('bizagent-home-store-')
   t.after(() => rm(root, { recursive: true, force: true }))
 
   const store = new HomeStore(root)
@@ -52,7 +53,7 @@ test('HomeStore persists index-first memory and revisions across reloads', async
 })
 
 test('HomeStore rejects duplicate addresses and cross-owner files', async (t) => {
-  const root = await mkdtemp('/private/tmp/bizagent-home-owner-')
+  const root = await makeTempDir('bizagent-home-owner-')
   t.after(() => rm(root, { recursive: true, force: true }))
   const store = new HomeStore(root)
   await store.initialize()

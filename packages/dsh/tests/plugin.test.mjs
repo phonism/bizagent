@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { test } from 'node:test'
 import { apply, inject } from '../lib/index.js'
+import { makeTempDir } from './temp-dir.mjs'
 
 class Table {
   records = new Map()
@@ -37,7 +38,7 @@ test('DSH plugin entry registers durable context and the complete v0.1 tool surf
   // A default-exported bare function loses that metadata at runtime.
   assert.deepEqual(inject, ['tools', 'systemPrompt', 'storageDomain', 'sessionQuery'])
 
-  const root = await mkdtemp('/private/tmp/bizagent-plugin-')
+  const root = await makeTempDir('bizagent-plugin-')
   t.after(() => rm(root, { recursive: true, force: true }))
   const tools = []
   const sections = []

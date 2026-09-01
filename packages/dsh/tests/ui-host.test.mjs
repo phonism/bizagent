@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { test } from 'node:test'
 import { HomeStore } from '../lib/home-store.js'
 import { LearningLedger } from '../lib/ledger.js'
 import { BizAgentService } from '../lib/service.js'
 import { BizAgentUiFacade, apply as applyUiHost } from '../lib/ui-host.js'
+import { makeTempDir } from './temp-dir.mjs'
 
 class Table {
   records = new Map()
@@ -49,7 +50,7 @@ function agent(id, cwd, text = 'Reusable learning') {
 }
 
 async function fixture(t) {
-  const root = await mkdtemp('/private/tmp/bizagent-ui-host-')
+  const root = await makeTempDir('bizagent-ui-host-')
   t.after(() => rm(root, { recursive: true, force: true }))
   const store = new HomeStore(root)
   await store.initialize()

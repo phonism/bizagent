@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { test } from 'node:test'
 import { HomeStore } from '../lib/home-store.js'
 import { BizAgentService } from '../lib/service.js'
+import { makeTempDir } from './temp-dir.mjs'
 
 class MemoryLedger {
   bindings = new Map()
@@ -57,7 +58,7 @@ function agent(id, cwd) {
 }
 
 test('single-agent learning and governed cross-Home learning form one closed loop', async (t) => {
-  const root = await mkdtemp('/private/tmp/bizagent-service-')
+  const root = await makeTempDir('bizagent-service-')
   t.after(() => rm(root, { recursive: true, force: true }))
   const personalCwd = `${root}/work/personal`
   const roleCwd = `${root}/work/role`
@@ -144,7 +145,7 @@ test('single-agent learning and governed cross-Home learning form one closed loo
 })
 
 test('a Session binding cannot drift after it is established', async (t) => {
-  const root = await mkdtemp('/private/tmp/bizagent-binding-')
+  const root = await makeTempDir('bizagent-binding-')
   t.after(() => rm(root, { recursive: true, force: true }))
   const store = new HomeStore(root)
   await store.initialize()
