@@ -2,6 +2,10 @@
 
 ## 0.1.0-alpha.2
 
+- 新增首次组织设置：使命、团队模板、成员/角色与共享能力可在一个流程中确认并批量创建；
+- 新增 `organization.yaml` 关系清单和组织图，Organization 作为四类 Home 之上的容器，而不是第五类 Home；
+- UI 重构为“组织 / 学习”双视图，组织图可直接进入各责任主体的学习账本；
+- Home 创建改为临时目录完整写入后原子 rename；组织清单只在全部引用 Home 存在后提交，失败可幂等重试；
 - Home Context 改为 `agent.inject()` 持久 Snapshot，同一 Session/Revision 不重复注入，支持重启与 replay；
 - 新增只针对明确纠正的有界 Learning Checkpoint，普通 Turn 不增加模型调用；
 - Checkpoint 以 `Session + Turn` 确定性编号并幂等结算，复用现有 metadata 表而不改变 Storage Domain 版本；

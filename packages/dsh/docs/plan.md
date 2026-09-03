@@ -671,7 +671,7 @@ v0.1 不是“先做一堆基础类”，而是完成下面两条可演示链路
 ### M6：v0.2 组织上下文（后续）
 
 - Business、Capability Home 的完整 E2E；
-- Organization Directory 和授权可见性；
+- 在 alpha.2 单组织关系清单基础上增加多组织 Directory、编辑/归档和授权可见性；
 - `Frame open/search/read/close`，同一 Session 只读联合多个 Home；
 - 将 P0 Lite 的明确纠正检测扩展为失败、验收等可插拔高价值信号；
 - Insight 的多证据生成、核验和晋升；

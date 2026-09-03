@@ -33,13 +33,16 @@ P0 Lite 进一步跑通明确纠正的自动学习：只有识别到强信号时
 
 ## UI
 
-安装后，DSH 左侧栏会出现 **BizAgent memory**。打开的是组织记忆台，不是一个通用管理后台：
+安装后，DSH 左侧栏会出现 **BizAgent 组织**：
 
+- 首次打开用三步引导定义使命、成员/角色和共享能力，并批量创建四类 Home；
+- 组织视图展示 Business 根、Personal/Role 责任配对和 Capability 共享能力层；
+- 组织与关系持久化到 `organization.yaml`，已有独立 Home 不会被引导修改；
 - 左侧浏览 Personal、Business、Role、Capability Home；
 - 中间用 Memory strata 展示 Episode → Memory → Insight → Knowledge → Method 的沉淀结构；
 - 展开资产可检查正文、revision、fitness、使用回执和证据链；
 - 右侧 proposal inbox 由目标 Home 接受或拒绝跨 Agent 经验；
-- 可创建新的 Agent Home，但不能绕开 evidence 规则直接手工创建 Memory。
+- 可创建组织图之外的新 Agent Home，但不能绕开 evidence 规则直接手工创建 Memory。
 
 UI 的 Host API、Client slot 与安全边界见[插件化 UI 设计](docs/ui.md)。
 

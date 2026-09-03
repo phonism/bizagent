@@ -41,6 +41,7 @@ node lib/cli.js --root /tmp/bizagent-demo doctor
 ```text
 /tmp/bizagent-demo/
 ├── directory.yaml
+├── organization.yaml       # 使用 Web 引导创建组织后出现
 └── homes/
     ├── personal--alice-.../
     │   ├── home.yaml
@@ -153,18 +154,31 @@ bizagent_learning_checkpoint
 bizagent_memory_feedback
 ```
 
-## 7. 组织记忆台
+## 7. 创建并使用一个完整组织
 
-启动 DSH Web 后，点击左侧栏底部的 **BizAgent memory**：
+启动 DSH Web 后，点击左侧栏底部的 **BizAgent 组织**。首次打开直接进入三步引导：
 
-1. 在 Home directory 中选择一个 Home；
-2. 通过 Memory strata 查看 Episode、Memory、Insight、Knowledge 和 Method 的数量与成熟方向；
-3. 在 Learning ledger 中搜索、筛选并展开资产，检查正文、fitness 和 evidence；
-4. 在 Proposal inbox 中以目标 Home owner 的身份留下裁决说明，再接受或拒绝；
-5. 需要新的所有权边界时，使用 Create Home。UI 不提供无证据的直接 Memory 编辑入口。
+1. 填写组织名称、稳定的英文/数字标识和使命；
+2. 选择产品研发、增长团队或精简创业模板，再修改成员、角色和长期职责；
+3. 确认需要跨成员复用的能力并创建组织。
+
+一次提交会创建一个 Business Home、每位成员的 Personal Home 与 Role Home，以及每项能力的 Capability Home；
+`organization.yaml` 保存 `member-of`、`fulfills-role` 和 `serves` 关系。只有所有 Home 均成功后组织才会出现在 UI，
+中断后用同一组织标识重试即可收敛，不会重复创建 Home。
+
+创建后默认进入**组织**视图：组织图中的成员和能力都可点击，并会切换到对应 Home 的**学习**视图。在学习视图中：
+
+1. 通过 Memory strata 查看 Episode、Memory、Insight、Knowledge 和 Method 的数量与成熟方向；
+2. 在 Learning ledger 中搜索、筛选并展开资产，检查正文、fitness 和 evidence；
+3. 在 Proposal inbox 中以目标 Home owner 的身份留下裁决说明，再接受或拒绝；
+4. 需要组织图之外的新所有权边界时，使用 Create Home。UI 不提供无证据的直接 Memory 编辑入口。
+
+Bundle 自动创建的 `personal:default` 不会被引导悄悄改写；它会显示为“尚未加入当前组织”。要让实际 DSH Session
+使用新组织中的 Home，仍需按第 3 节配置 `defaultHome` 或 `workspaceHomes`。Session 首次绑定后不可漂移。
 
 UI 作为 DSH Client 插件加载。Host adapter 是独立 Cordis row `bizagent-ui`，通过同源、无缓存、64 KiB
-上限的 `/api/bizagent/v1/*` 接口读写；跨源 mutation 会被拒绝。
+上限的 `/api/bizagent/v1/*` 接口读写；跨源 mutation 会被拒绝。组织引导使用
+`POST /api/bizagent/v1/organization`，学习账本仍沿用原有 Home 与 proposal 接口。
 
 ## 8. Alpha 限制
 

@@ -17,6 +17,7 @@ import {
   type UiAsset,
   type UiAssetCounts,
   type UiCreateHomeRequest,
+  type UiCreateOrganizationRequest,
   type UiHomeDetail,
   type UiHomeSummary,
   type UiOverview,
@@ -36,6 +37,29 @@ const CreateHomeSchema = z.object({
   identity: z.string().trim().min(1).max(64 * 1024).optional(),
 })
 
+const SafeIdSchema = z.string().trim().min(1).max(64).regex(
+  /^[a-z0-9][a-z0-9._-]*$/,
+  'Use lowercase letters, numbers, dots, underscores, or hyphens.',
+)
+
+const CreateOrganizationSchema = z.object({
+  id: SafeIdSchema,
+  name: z.string().trim().min(1).max(200),
+  mission: z.string().trim().min(1).max(2000),
+  members: z.array(z.object({
+    id: SafeIdSchema,
+    displayName: z.string().trim().min(1).max(200),
+    roleId: SafeIdSchema,
+    roleName: z.string().trim().min(1).max(200),
+    responsibility: z.string().trim().min(1).max(1000),
+  })).min(1).max(24),
+  capabilities: z.array(z.object({
+    id: SafeIdSchema,
+    displayName: z.string().trim().min(1).max(200),
+    responsibility: z.string().trim().min(1).max(1000),
+  })).max(24),
+})
+
 const ProposalDecisionSchema = z.object({
   ownerAddress: z.string().min(3).max(200),
   proposalId: z.string().min(1).max(200),
@@ -51,9 +75,11 @@ export class BizAgentUiFacade {
     const proposals = this.service.ledger.listProposals()
     const homes = this.service.store.listHomes().map(home => this.homeSummary(home.address, proposals))
     const health = await this.service.store.doctor()
+    const organization = this.service.store.getOrganization()
     return {
       generatedAt: nowIso(),
       homeRoot: this.service.store.root,
+      ...(organization === undefined ? {} : { organization }),
       homes,
       proposals,
       totals: {
@@ -116,6 +142,12 @@ export class BizAgentUiFacade {
     return this.home(home.address)
   }
 
+  async createOrganization(request: UiCreateOrganizationRequest): Promise<UiOverview> {
+    const input = CreateOrganizationSchema.parse(request)
+    await this.service.store.createOrganization(input)
+    return this.overview()
+  }
+
   async decideProposal(request: UiProposalDecisionRequest): Promise<UiHomeDetail> {
     const input = ProposalDecisionSchema.parse(request)
     const ownerAddress = parseHomeAddress(input.ownerAddress)
@@ -162,6 +194,14 @@ export function apply(ctx: Context): void {
       kind: 'exact',
       path: `${BIZAGENT_UI_API}/overview`,
       handler: (req, res) => route(req, res, 'GET', () => facade.overview()),
+    }),
+    ctx.webServer.register({
+      kind: 'exact',
+      path: `${BIZAGENT_UI_API}/organization`,
+      handler: (req, res) => route(req, res, 'POST', async () => {
+        const input = CreateOrganizationSchema.parse(await readJson(req))
+        return facade.createOrganization(input)
+      }),
     }),
     ctx.webServer.register({
       kind: 'exact',

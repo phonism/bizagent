@@ -2,6 +2,7 @@ import {
   BIZAGENT_UI_API,
   type UiApiError,
   type UiCreateHomeRequest,
+  type UiCreateOrganizationRequest,
   type UiHomeDetail,
   type UiOverview,
   type UiProposalDecisionRequest,
@@ -11,6 +12,7 @@ export interface BizAgentUiPort {
   overview(signal?: AbortSignal): Promise<UiOverview>
   home(address: string, signal?: AbortSignal): Promise<UiHomeDetail>
   createHome(request: UiCreateHomeRequest, signal?: AbortSignal): Promise<UiHomeDetail>
+  createOrganization(request: UiCreateOrganizationRequest, signal?: AbortSignal): Promise<UiOverview>
   decideProposal(request: UiProposalDecisionRequest, signal?: AbortSignal): Promise<UiHomeDetail>
 }
 
@@ -25,6 +27,15 @@ export class BizAgentUiHttpPort implements BizAgentUiPort {
 
   createHome(input: UiCreateHomeRequest, signal?: AbortSignal): Promise<UiHomeDetail> {
     return request(`${BIZAGENT_UI_API}/homes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+      ...(signal === undefined ? {} : { signal }),
+    })
+  }
+
+  createOrganization(input: UiCreateOrganizationRequest, signal?: AbortSignal): Promise<UiOverview> {
+    return request(`${BIZAGENT_UI_API}/organization`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),

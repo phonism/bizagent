@@ -7,6 +7,7 @@ import type {
   HomeAddress,
   HomeType,
   MemoryProposal,
+  Organization,
 } from './domain.js'
 
 export const BIZAGENT_UI_API = '/api/bizagent/v1'
@@ -66,6 +67,7 @@ export interface UiHomeDetail {
 export interface UiOverview {
   generatedAt: string
   homeRoot: string
+  organization?: Organization
   homes: UiHomeSummary[]
   proposals: MemoryProposal[]
   totals: {
@@ -86,6 +88,24 @@ export interface UiCreateHomeRequest {
   displayName?: string
   owner?: string
   identity?: string
+}
+
+export interface UiCreateOrganizationRequest {
+  id: string
+  name: string
+  mission: string
+  members: Array<{
+    id: string
+    displayName: string
+    roleId: string
+    roleName: string
+    responsibility: string
+  }>
+  capabilities: Array<{
+    id: string
+    displayName: string
+    responsibility: string
+  }>
 }
 
 export interface UiProposalDecisionRequest {

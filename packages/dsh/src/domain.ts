@@ -4,6 +4,9 @@ import { z } from 'zod'
 export const HOME_TYPES = ['personal', 'business', 'role', 'capability'] as const
 export type HomeType = typeof HOME_TYPES[number]
 
+export const ORGANIZATION_RELATIONS = ['member-of', 'fulfills-role', 'serves'] as const
+export type OrganizationRelation = typeof ORGANIZATION_RELATIONS[number]
+
 export const ASSET_KINDS = ['memory', 'insight', 'knowledge', 'method', 'identity'] as const
 export type AssetKind = typeof ASSET_KINDS[number]
 
@@ -73,6 +76,74 @@ export const AgentHomeSchema = z.object({
 })
 
 export type AgentHome = z.infer<typeof AgentHomeSchema> & { address: HomeAddress }
+
+export const OrganizationLinkSchema = z.object({
+  from: HomeAddressSchema,
+  to: HomeAddressSchema,
+  relation: z.enum(ORGANIZATION_RELATIONS),
+})
+
+export const OrganizationSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
+  name: z.string().min(1),
+  mission: z.string().min(1),
+  businessHome: HomeAddressSchema,
+  members: z.array(z.object({
+    personalHome: HomeAddressSchema,
+    roleHome: HomeAddressSchema,
+  })).min(1),
+  capabilityHomes: z.array(HomeAddressSchema),
+  links: z.array(OrganizationLinkSchema),
+  revision: z.number().int().positive(),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+}).superRefine((organization, context) => {
+  if (!organization.businessHome.startsWith('business:')) {
+    context.addIssue({ code: 'custom', path: ['businessHome'], message: 'businessHome must be a Business Home' })
+  }
+  const declared = new Set<string>([organization.businessHome])
+  const seenMembers = new Set<string>()
+  organization.members.forEach((member, index) => {
+    if (!member.personalHome.startsWith('personal:')) {
+      context.addIssue({ code: 'custom', path: ['members', index, 'personalHome'], message: 'member must use a Personal Home' })
+    }
+    if (!member.roleHome.startsWith('role:')) {
+      context.addIssue({ code: 'custom', path: ['members', index, 'roleHome'], message: 'member role must use a Role Home' })
+    }
+    if (seenMembers.has(member.personalHome)) {
+      context.addIssue({ code: 'custom', path: ['members', index, 'personalHome'], message: 'duplicate organization member' })
+    }
+    seenMembers.add(member.personalHome)
+    declared.add(member.personalHome)
+    declared.add(member.roleHome)
+  })
+  organization.capabilityHomes.forEach((address, index) => {
+    if (!address.startsWith('capability:')) {
+      context.addIssue({ code: 'custom', path: ['capabilityHomes', index], message: 'capability must use a Capability Home' })
+    }
+    declared.add(address)
+  })
+  organization.links.forEach((link, index) => {
+    if (!declared.has(link.from) || !declared.has(link.to)) {
+      context.addIssue({ code: 'custom', path: ['links', index], message: 'link endpoints must belong to this organization' })
+    }
+    const validShape = link.relation === 'member-of'
+      ? link.from.startsWith('personal:') && link.to === organization.businessHome
+      : link.relation === 'fulfills-role'
+        ? link.from.startsWith('personal:') && link.to.startsWith('role:')
+        : (link.from.startsWith('role:') || link.from.startsWith('capability:'))
+          && link.to === organization.businessHome
+    if (!validShape) context.addIssue({ code: 'custom', path: ['links', index], message: 'relation has invalid Home types' })
+  })
+})
+
+export type Organization = Omit<z.infer<typeof OrganizationSchema>, 'businessHome' | 'members' | 'capabilityHomes' | 'links'> & {
+  businessHome: HomeAddress
+  members: Array<{ personalHome: HomeAddress; roleHome: HomeAddress }>
+  capabilityHomes: HomeAddress[]
+  links: Array<{ from: HomeAddress; to: HomeAddress; relation: OrganizationRelation }>
+}
 
 export const AssetMetadataSchema = z.object({
   schemaVersion: z.literal(1),

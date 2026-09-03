@@ -115,7 +115,34 @@ test('UI facade exposes memory strata and settles a proposal only as its target 
   assert.equal(role.proposals[0].status, 'accepted')
 })
 
-test('UI host remains a separate optional Cordis adapter with four bounded routes', async (t) => {
+test('UI facade bootstraps an organization and exposes it in the overview', async (t) => {
+  const { service } = await fixture(t)
+  const facade = new BizAgentUiFacade(service)
+  const overview = await facade.createOrganization({
+    id: 'acme',
+    name: 'Acme Agents',
+    mission: 'ship useful software with evidence.',
+    members: [{
+      id: 'builder',
+      displayName: 'Builder',
+      roleId: 'engineering',
+      roleName: 'Engineering',
+      responsibility: 'Implement, test, and maintain the product.',
+    }],
+    capabilities: [{
+      id: 'delivery',
+      displayName: 'Product Delivery',
+      responsibility: 'Retain repeatable delivery methods.',
+    }],
+  })
+
+  assert.equal(overview.organization.name, 'Acme Agents')
+  assert.equal(overview.organization.businessHome, 'business:acme')
+  assert.equal(overview.homes.length, 6)
+  assert.equal(overview.homes.find(home => home.address === 'role:engineering').displayName, 'Engineering')
+})
+
+test('UI host remains a separate optional Cordis adapter with five bounded routes', async (t) => {
   const { service } = await fixture(t)
   const routes = new Map()
   const disposers = []
@@ -137,6 +164,7 @@ test('UI host remains a separate optional Cordis adapter with four bounded route
   assert.deepEqual([...routes.keys()].sort(), [
     '/api/bizagent/v1/home',
     '/api/bizagent/v1/homes',
+    '/api/bizagent/v1/organization',
     '/api/bizagent/v1/overview',
     '/api/bizagent/v1/proposals/decision',
   ])

@@ -17,7 +17,8 @@ agent runtime you use:
   this package.
 - [`packages/dsh`](./packages/dsh/README.md): a DeepSeek Harness (DSH) plugin with stable
   Agent Homes, multi-level memory, evidence-backed learning, governed cross-agent
-  proposals, and a memory UI. See its [quick start](./packages/dsh/docs/quickstart.md).
+  proposals, first-run organization setup, an organization map, and a learning UI. See its
+  [quick start](./packages/dsh/docs/quickstart.md).
 
 ## What This Is
 

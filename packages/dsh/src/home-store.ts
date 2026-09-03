@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, realpath, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import YAML from 'yaml'
 import { z } from 'zod'
 import {
   AgentHomeSchema,
   AssetMetadataSchema,
+  OrganizationSchema,
   type AgentHome,
   type AssetKind,
   type AssetMetadata,
@@ -13,6 +14,7 @@ import {
   type ContextBudget,
   type EvidenceRef,
   type HomeAddress,
+  type Organization,
   type StoredAsset,
   homeTypeOf,
   nowIso,
@@ -48,6 +50,24 @@ export interface CreateHomeInput {
   displayName?: string
   owner?: string
   identity?: string
+}
+
+export interface CreateOrganizationInput {
+  id: string
+  name: string
+  mission: string
+  members: Array<{
+    id: string
+    displayName: string
+    roleId: string
+    roleName: string
+    responsibility: string
+  }>
+  capabilities: Array<{
+    id: string
+    displayName: string
+    responsibility: string
+  }>
 }
 
 export interface CreateAssetInput {
@@ -93,12 +113,15 @@ export interface DoctorReport {
 export class HomeStore {
   readonly root: string
   readonly homesRoot: string
+  readonly organizationFile: string
   private readonly homes = new Map<HomeAddress, HomeCache>()
+  private organization: Organization | undefined
   private mutationTail: Promise<unknown> = Promise.resolve()
 
   constructor(root: string) {
     this.root = resolve(root)
     this.homesRoot = join(this.root, 'homes')
+    this.organizationFile = join(this.root, 'organization.yaml')
   }
 
   async initialize(): Promise<void> {
@@ -113,9 +136,11 @@ export class HomeStore {
 
   async reload(): Promise<void> {
     this.homes.clear()
+    this.organization = undefined
     const entries = await readdir(this.homesRoot, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
+      if (entry.name.endsWith('.tmp')) continue
       const directory = join(this.homesRoot, entry.name)
       let cache: HomeCache
       try {
@@ -128,6 +153,7 @@ export class HomeStore {
       }
       this.homes.set(cache.home.address, cache)
     }
+    await this.loadOrganization()
     await this.writeDirectory()
   }
 
@@ -153,44 +179,120 @@ export class HomeStore {
     return this.requireHome(parseHomeAddress(address)).identity
   }
 
-  async createHome(input: CreateHomeInput): Promise<AgentHome> {
-    return this.mutate(async () => {
-      const address = parseHomeAddress(input.address)
-      const existing = this.homes.get(address)
-      if (existing !== undefined) return structuredClone(existing.home)
+  getOrganization(): Organization | undefined {
+    return this.organization === undefined ? undefined : structuredClone(this.organization)
+  }
 
-      const id = safeHomeId(address)
-      const directory = join(this.homesRoot, id)
-      this.assertWithinRoot(directory)
-      await mkdir(directory, { recursive: false })
-      for (const child of Object.values(KIND_DIRECTORY)) {
-        await mkdir(join(directory, child))
+  async createHome(input: CreateHomeInput): Promise<AgentHome> {
+    return this.mutate(async () => this.createHomeUnlocked(input, true, false))
+  }
+
+  async createOrganization(input: CreateOrganizationInput): Promise<Organization> {
+    return this.mutate(async () => {
+      if (this.organization !== undefined) {
+        if (this.organization.id === input.id) return structuredClone(this.organization)
+        throw new Error(`organization already exists: ${this.organization.id}`)
       }
-      await mkdir(join(directory, 'worklogs'))
-      await mkdir(join(directory, 'archive'))
+
+      const id = normalizeId(input.id, 'organization')
+      const name = normalizeLabel(input.name, 'organization name')
+      const mission = normalizeBody(input.mission)
+      if (input.members.length === 0) throw new Error('organization must have at least one member')
+
+      const businessHome = parseHomeAddress(`business:${id}`)
+      const memberHomes: Organization['members'] = []
+      const capabilityHomes: HomeAddress[] = []
+      const links: Organization['links'] = []
+      const homeInputs: CreateHomeInput[] = [{
+        address: businessHome,
+        displayName: name,
+        owner: name,
+        identity: `${name} exists to ${mission}\n\nThis Business Home owns shared goals, decisions, and organizational learning.`,
+      }]
+      const addresses = new Set<string>([businessHome])
+      const roles = new Map<string, { name: string; responsibility: string }>()
+
+      for (const member of input.members) {
+        const memberId = normalizeId(member.id, 'member')
+        const roleId = normalizeId(member.roleId, 'role')
+        const displayName = normalizeLabel(member.displayName, 'member name')
+        const roleName = normalizeLabel(member.roleName, 'role name')
+        const responsibility = normalizeBody(member.responsibility)
+        const personalHome = parseHomeAddress(`personal:${memberId}`)
+        const roleHome = parseHomeAddress(`role:${roleId}`)
+        if (addresses.has(personalHome)) throw new Error(`duplicate member id: ${memberId}`)
+        addresses.add(personalHome)
+
+        const existingRole = roles.get(roleId)
+        if (existingRole !== undefined
+          && (existingRole.name !== roleName || existingRole.responsibility !== responsibility)) {
+          throw new Error(`role ${roleId} has conflicting definitions`)
+        }
+        if (existingRole === undefined) {
+          roles.set(roleId, { name: roleName, responsibility })
+          addresses.add(roleHome)
+          homeInputs.push({
+            address: roleHome,
+            displayName: roleName,
+            owner: name,
+            identity: `${roleName} serves ${name}.\n\nEnduring responsibility: ${responsibility}`,
+          })
+          links.push({ from: roleHome, to: businessHome, relation: 'serves' })
+        }
+
+        homeInputs.push({
+          address: personalHome,
+          displayName,
+          owner: name,
+          identity: `${displayName} is a member of ${name} and fulfills the ${roleName} role.\n\nResponsibility: ${responsibility}`,
+        })
+        memberHomes.push({ personalHome, roleHome })
+        links.push(
+          { from: personalHome, to: businessHome, relation: 'member-of' },
+          { from: personalHome, to: roleHome, relation: 'fulfills-role' },
+        )
+      }
+
+      for (const capability of input.capabilities) {
+        const capabilityId = normalizeId(capability.id, 'capability')
+        const displayName = normalizeLabel(capability.displayName, 'capability name')
+        const responsibility = normalizeBody(capability.responsibility)
+        const capabilityHome = parseHomeAddress(`capability:${capabilityId}`)
+        if (addresses.has(capabilityHome)) throw new Error(`duplicate capability id: ${capabilityId}`)
+        addresses.add(capabilityHome)
+        capabilityHomes.push(capabilityHome)
+        homeInputs.push({
+          address: capabilityHome,
+          displayName,
+          owner: name,
+          identity: `${displayName} is a reusable organizational capability of ${name}.\n\nIt owns: ${responsibility}`,
+        })
+        links.push({ from: capabilityHome, to: businessHome, relation: 'serves' })
+      }
+
+      // Homes are idempotent, so a failed setup can be retried safely before the
+      // manifest is committed. The organization becomes visible only after every
+      // referenced Home exists.
+      for (const homeInput of homeInputs) await this.createHomeUnlocked(homeInput, false, true)
 
       const createdAt = nowIso()
-      const identity = normalizeBody(input.identity ?? defaultIdentity(address))
-      const digest = contextDigest(identity, [])
-      const home = AgentHomeSchema.parse({
+      const organization = OrganizationSchema.parse({
         schemaVersion: 1,
         id,
-        address,
-        type: homeTypeOf(address),
-        displayName: input.displayName?.trim() || address,
-        ...(input.owner?.trim() ? { owner: input.owner.trim() } : {}),
+        name,
+        mission,
+        businessHome,
+        members: memberHomes,
+        capabilityHomes,
+        links,
         revision: 1,
-        contextDigest: digest,
-        status: 'active',
         createdAt,
         updatedAt: createdAt,
-      }) as AgentHome
-
-      await atomicWrite(join(directory, 'identity.md'), `${identity}\n`)
-      await atomicWrite(join(directory, 'home.yaml'), YAML.stringify(home, { lineWidth: 0 }))
-      this.homes.set(address, { home, directory, identity, assets: new Map() })
+      }) as Organization
+      await atomicWrite(this.organizationFile, YAML.stringify(organization, { lineWidth: 0 }))
+      this.organization = organization
       await this.writeDirectory()
-      return structuredClone(home)
+      return structuredClone(organization)
     })
   }
 
@@ -388,6 +490,91 @@ export class HomeStore {
     return { home, directory, identity, assets }
   }
 
+  private async loadOrganization(): Promise<void> {
+    let raw: unknown
+    try {
+      raw = YAML.parse(await readFile(this.organizationFile, 'utf8'))
+    } catch (error) {
+      if (isNotFound(error)) return
+      throw error
+    }
+    const organization = OrganizationSchema.parse(raw) as Organization
+    const referenced = new Set<HomeAddress>([
+      organization.businessHome,
+      ...organization.members.flatMap(member => [member.personalHome, member.roleHome]),
+      ...organization.capabilityHomes,
+      ...organization.links.flatMap(link => [link.from, link.to]),
+    ])
+    for (const address of referenced) {
+      if (!this.homes.has(address)) throw new Error(`organization references missing Agent Home: ${address}`)
+    }
+    this.organization = organization
+  }
+
+  private async createHomeUnlocked(
+    input: CreateHomeInput,
+    writeDirectory: boolean,
+    requireMatchingExisting: boolean,
+  ): Promise<AgentHome> {
+    const address = parseHomeAddress(input.address)
+    const existing = this.homes.get(address)
+    if (existing !== undefined) {
+      if (requireMatchingExisting) {
+        const expectedName = input.displayName?.trim() || address
+        const expectedOwner = input.owner?.trim()
+        const expectedIdentity = normalizeBody(input.identity ?? defaultIdentity(address))
+        if (existing.home.displayName !== expectedName
+          || existing.home.owner !== expectedOwner
+          || existing.identity !== expectedIdentity) {
+          throw new Error(`Agent Home already exists with a different definition: ${address}`)
+        }
+      }
+      return structuredClone(existing.home)
+    }
+
+    const id = safeHomeId(address)
+    const directory = join(this.homesRoot, id)
+    this.assertWithinRoot(directory)
+    const temporaryDirectory = `${directory}.${process.pid}.${randomUUID()}.tmp`
+    this.assertWithinRoot(temporaryDirectory)
+    await mkdir(temporaryDirectory, { recursive: false })
+
+    let home: AgentHome
+    let identity: string
+    try {
+      for (const child of Object.values(KIND_DIRECTORY)) await mkdir(join(temporaryDirectory, child))
+      await mkdir(join(temporaryDirectory, 'worklogs'))
+      await mkdir(join(temporaryDirectory, 'archive'))
+
+      const createdAt = nowIso()
+      identity = normalizeBody(input.identity ?? defaultIdentity(address))
+      const digest = contextDigest(identity, [])
+      home = AgentHomeSchema.parse({
+        schemaVersion: 1,
+        id,
+        address,
+        type: homeTypeOf(address),
+        displayName: input.displayName?.trim() || address,
+        ...(input.owner?.trim() ? { owner: input.owner.trim() } : {}),
+        revision: 1,
+        contextDigest: digest,
+        status: 'active',
+        createdAt,
+        updatedAt: createdAt,
+      }) as AgentHome
+
+      await atomicWrite(join(temporaryDirectory, 'identity.md'), `${identity}\n`)
+      await atomicWrite(join(temporaryDirectory, 'home.yaml'), YAML.stringify(home, { lineWidth: 0 }))
+      await rename(temporaryDirectory, directory)
+    } catch (error) {
+      await rm(temporaryDirectory, { recursive: true, force: true })
+      throw error
+    }
+    this.homes.set(address, { home, directory, identity, assets: new Map() })
+    if (writeDirectory) await this.writeDirectory()
+    return structuredClone(home)
+  }
+
   private async refreshHome(cache: HomeCache): Promise<void> {
     const digest = contextDigest(cache.identity, [...cache.assets.values()])
     if (digest === cache.home.contextDigest) return
@@ -454,6 +641,25 @@ function normalizeBody(body: string): string {
 
 function normalizeTags(tags: string[]): string[] {
   return [...new Set(tags.map(tag => tag.trim()).filter(Boolean))].sort()
+}
+
+function normalizeId(value: string, label: string): string {
+  const normalized = value.trim().toLocaleLowerCase()
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(normalized)) {
+    throw new Error(`${label} id must use 1-64 lowercase letters, numbers, dots, underscores, or hyphens`)
+  }
+  return normalized
+}
+
+function normalizeLabel(value: string, label: string): string {
+  const normalized = value.trim()
+  if (normalized.length === 0) throw new Error(`${label} must not be empty`)
+  if (normalized.length > 200) throw new Error(`${label} must be at most 200 characters`)
+  return normalized
+}
+
+function isNotFound(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }
 
 function stripStoredFields(asset: StoredAsset): AssetMetadata {

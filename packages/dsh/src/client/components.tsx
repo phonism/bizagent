@@ -22,6 +22,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {
   LearningKind,
   UiAsset,
+  UiCreateOrganizationRequest,
   UiHomeDetail,
   UiHomeSummary,
   UiOverview,
@@ -45,6 +46,7 @@ type DashboardProps = PropsRuntime<'shell.overlay'>
 const KINDS: LearningKind[] = ['memory', 'insight', 'knowledge', 'method']
 const STATUSES = ['active', 'candidate', 'superseded', 'retired'] as const
 const HOME_TYPES = ['personal', 'business', 'role', 'capability'] as const
+type DashboardView = 'organization' | 'learning'
 
 export function BizAgentLauncher({ wide, controller, t }: LauncherProps) {
   const open = useSyncExternalStore(controller.subscribe, controller.getSnapshot).open
@@ -77,12 +79,13 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string>()
   const [createOpen, setCreateOpen] = useState(false)
+  const [view, setView] = useState<DashboardView>('organization')
 
   const load = async (preferred?: string, signal?: AbortSignal): Promise<void> => {
     const nextOverview = await api.overview(signal)
     const address = nextOverview.homes.some(home => home.address === preferred)
       ? preferred
-      : nextOverview.homes[0]?.address
+      : nextOverview.organization?.businessHome ?? nextOverview.homes[0]?.address
     const nextDetail = address === undefined ? undefined : await api.home(address, signal)
     setOverview(nextOverview)
     setSelectedAddress(address)
@@ -169,6 +172,17 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
     setSelectedProposal(undefined)
   }
 
+
+  const onOrganizationCreated = async (nextOverview: UiOverview): Promise<void> => {
+    const address = nextOverview.organization?.businessHome
+    setOverview(nextOverview)
+    setView('organization')
+    if (address !== undefined) {
+      setSelectedAddress(address)
+      setDetail(await api.home(address))
+    }
+  }
+
   return (
     <div className="ba-overlay" onPointerDown={(event) => {
       if (event.target === event.currentTarget) controller.close()
@@ -188,6 +202,16 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
             <h2 className="ba-title" id="ba-dashboard-title">{t('dashboard.title')}</h2>
             <p className="ba-subtitle">{t('dashboard.subtitle')}</p>
           </div>
+          {overview?.organization !== undefined ? (
+            <nav className="ba-view-tabs" aria-label={t('nav.aria')}>
+              <button type="button" data-active={view === 'organization' ? 'true' : 'false'} onClick={() => { setView('organization') }}>
+                {t('nav.organization')}
+              </button>
+              <button type="button" data-active={view === 'learning' ? 'true' : 'false'} onClick={() => { setView('learning') }}>
+                {t('nav.learning')}
+              </button>
+            </nav>
+          ) : null}
           <div className="ba-top-actions">
             {overview !== undefined ? (
               <span className="ba-health" data-ok={overview.health.ok ? 'true' : 'false'}>
@@ -221,6 +245,17 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
 
         {loading ? <LoadingState label={t('dashboard.loading')} /> : error !== undefined && overview === undefined ? (
           <FailureState message={t('dashboard.failed', { message: error })} retry={() => { void refresh() }} retryLabel={t('dashboard.retry')} />
+        ) : overview !== undefined && overview.organization === undefined ? (
+          <OrganizationSetup api={api} onCreated={onOrganizationCreated} t={t} />
+        ) : view === 'organization' && overview?.organization !== undefined ? (
+          <OrganizationOverview
+            overview={overview}
+            onOpenHome={(address) => {
+              void selectHome(address).then(() => { setView('learning') })
+            }}
+            onOpenLearning={() => { setView('learning') }}
+            t={t}
+          />
         ) : (
           <div className="ba-body">
             <HomeDirectory
@@ -264,6 +299,276 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
         ) : null}
       </section>
     </div>
+  )
+}
+
+type MemberDraft = UiCreateOrganizationRequest['members'][number]
+type CapabilityDraft = UiCreateOrganizationRequest['capabilities'][number]
+
+function OrganizationSetup({ api, onCreated, t }: {
+  api: BizAgentUiPort
+  onCreated: (overview: UiOverview) => Promise<void>
+  t: DashboardProps['t']
+}) {
+  const [step, setStep] = useState(0)
+  const [name, setName] = useState('')
+  const [id, setId] = useState('')
+  const [idTouched, setIdTouched] = useState(false)
+  const [mission, setMission] = useState('')
+  const [members, setMembers] = useState<MemberDraft[]>(() => teamTemplate('product', t).members)
+  const [capabilities, setCapabilities] = useState<CapabilityDraft[]>(() => teamTemplate('product', t).capabilities)
+  const [template, setTemplate] = useState('product')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+
+  const validBasics = Boolean(name.trim() && mission.trim() && safeId(id))
+  const validMembers = new Set(members.map(member => member.id)).size === members.length
+    && members.length > 0 && members.every(member => (
+    safeId(member.id) && safeId(member.roleId)
+      && member.displayName.trim() && member.roleName.trim() && member.responsibility.trim()
+  ))
+  const validCapabilities = new Set(capabilities.map(capability => capability.id)).size === capabilities.length
+    && capabilities.every(capability => (
+    safeId(capability.id) && capability.displayName.trim() && capability.responsibility.trim()
+  ))
+
+  const chooseTemplate = (next: string): void => {
+    const draft = teamTemplate(next, t)
+    setTemplate(next)
+    setMembers(draft.members)
+    setCapabilities(draft.capabilities)
+  }
+
+  const updateMember = (index: number, patch: Partial<MemberDraft>): void => {
+    setMembers(current => current.map((member, position) => position === index ? { ...member, ...patch } : member))
+  }
+
+  const updateCapability = (index: number, patch: Partial<CapabilityDraft>): void => {
+    setCapabilities(current => current.map((capability, position) => position === index ? { ...capability, ...patch } : capability))
+  }
+
+  const submit = async (): Promise<void> => {
+    if (!validBasics || !validMembers || !validCapabilities || busy) return
+    setBusy(true)
+    setError(undefined)
+    try {
+      await onCreated(await api.createOrganization({
+        id,
+        name: name.trim(),
+        mission: mission.trim(),
+        members: members.map(member => ({
+          ...member,
+          displayName: member.displayName.trim(),
+          roleName: member.roleName.trim(),
+          responsibility: member.responsibility.trim(),
+          roleId: member.roleId,
+        })),
+        capabilities: capabilities.map(capability => ({
+          ...capability,
+          displayName: capability.displayName.trim(),
+          responsibility: capability.responsibility.trim(),
+        })),
+      }))
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="ba-setup-shell">
+      <aside className="ba-setup-rail">
+        <span className="ba-setup-kicker">{t('setup.kicker')}</span>
+        <h3>{t('setup.title')}</h3>
+        <p>{t('setup.subtitle')}</p>
+        <ol className="ba-steps">
+          {[t('setup.step.identity'), t('setup.step.team'), t('setup.step.capabilities')].map((label, index) => (
+            <li data-active={step === index ? 'true' : 'false'} data-done={step > index ? 'true' : 'false'} key={label}>
+              <span>{step > index ? '✓' : index + 1}</span>{label}
+            </li>
+          ))}
+        </ol>
+      </aside>
+      <form className="ba-setup-content" onSubmit={(event) => {
+        event.preventDefault()
+        if (step === 0 && validBasics) setStep(1)
+        else if (step === 1 && validMembers) setStep(2)
+        else if (step === 2) void submit()
+      }}>
+        {step === 0 ? (
+          <div className="ba-setup-stage">
+            <p className="ba-stage-number">01 / 03</p>
+            <h3>{t('setup.identity.title')}</h3>
+            <p className="ba-stage-lead">{t('setup.identity.lead')}</p>
+            <div className="ba-setup-grid">
+              <label className="ba-form-field">
+                <span className="ba-field-label">{t('setup.name')}</span>
+                <input className="ba-input" autoFocus value={name} placeholder={t('setup.name.placeholder')} onChange={(event) => {
+                  const next = event.target.value
+                  setName(next)
+                  if (!idTouched) setId(safeSlug(next))
+                }} />
+              </label>
+              <label className="ba-form-field">
+                <span className="ba-field-label">{t('setup.id')}</span>
+                <input className="ba-input" value={id} placeholder="acme-labs" onChange={(event) => {
+                  setIdTouched(true)
+                  setId(safeSlug(event.target.value))
+                }} />
+              </label>
+              <label className="ba-form-field" data-wide="true">
+                <span className="ba-field-label">{t('setup.mission')}</span>
+                <textarea className="ba-textarea ba-mission-input" value={mission} placeholder={t('setup.mission.placeholder')} onChange={(event) => { setMission(event.target.value) }} />
+              </label>
+            </div>
+          </div>
+        ) : step === 1 ? (
+          <div className="ba-setup-stage">
+            <p className="ba-stage-number">02 / 03</p>
+            <h3>{t('setup.team.title')}</h3>
+            <p className="ba-stage-lead">{t('setup.team.lead')}</p>
+            <div className="ba-template-row">
+              {['product', 'growth', 'compact'].map(value => (
+                <button type="button" data-active={template === value ? 'true' : 'false'} onClick={() => { chooseTemplate(value) }} key={value}>
+                  {t(`setup.template.${value}` as 'setup.template.product')}
+                </button>
+              ))}
+            </div>
+            <div className="ba-draft-list">
+              {members.map((member, index) => (
+                <article className="ba-member-draft" key={index}>
+                  <span className="ba-node-marker" data-type="personal">{index + 1}</span>
+                  <label><span>{t('setup.member.name')}</span><input value={member.displayName} onChange={(event) => { updateMember(index, { displayName: event.target.value }) }} /></label>
+                  <label><span>{t('setup.member.role')}</span><input value={member.roleName} onChange={(event) => { updateMember(index, { roleName: event.target.value }) }} /></label>
+                  <label className="ba-draft-wide"><span>{t('setup.member.responsibility')}</span><input value={member.responsibility} onChange={(event) => { updateMember(index, { responsibility: event.target.value }) }} /></label>
+                  <button type="button" className="ba-draft-remove" aria-label={t('setup.remove')} disabled={members.length === 1} onClick={() => { setMembers(current => current.filter((_, position) => position !== index)) }}>×</button>
+                </article>
+              ))}
+            </div>
+            <button type="button" className="ba-add-row" onClick={() => { setMembers(current => [...current, emptyMember(current.length + 1, t)]) }}>
+              <IconPlusOutline16 size={14} /> {t('setup.member.add')}
+            </button>
+          </div>
+        ) : (
+          <div className="ba-setup-stage">
+            <p className="ba-stage-number">03 / 03</p>
+            <h3>{t('setup.capabilities.title')}</h3>
+            <p className="ba-stage-lead">{t('setup.capabilities.lead')}</p>
+            <div className="ba-capability-drafts">
+              {capabilities.map((capability, index) => (
+                <article className="ba-capability-draft" key={index}>
+                  <span className="ba-node-marker" data-type="capability" />
+                  <label><span>{t('setup.capability.name')}</span><input value={capability.displayName} onChange={(event) => { updateCapability(index, { displayName: event.target.value }) }} /></label>
+                  <label><span>{t('setup.capability.responsibility')}</span><input value={capability.responsibility} onChange={(event) => { updateCapability(index, { responsibility: event.target.value }) }} /></label>
+                  <button type="button" className="ba-draft-remove" aria-label={t('setup.remove')} onClick={() => { setCapabilities(current => current.filter((_, position) => position !== index)) }}>×</button>
+                </article>
+              ))}
+            </div>
+            <button type="button" className="ba-add-row" onClick={() => { setCapabilities(current => [...current, emptyCapability(current.length + 1, t)]) }}>
+              <IconPlusOutline16 size={14} /> {t('setup.capability.add')}
+            </button>
+            <div className="ba-setup-summary">
+              <span className="ba-home-type-dot" data-type="business" />
+              <strong>{name}</strong>
+              <span>{t('setup.summary', { members: members.length, capabilities: capabilities.length, homes: 1 + members.length * 2 + capabilities.length })}</span>
+            </div>
+            {error !== undefined ? <p className="ba-inline-error" role="alert">{t('setup.failed', { message: error })}</p> : null}
+          </div>
+        )}
+        <footer className="ba-setup-actions">
+          {step > 0 ? <button type="button" className="ba-button" onClick={() => { setStep(current => current - 1) }}>{t('setup.back')}</button> : <span />}
+          {step < 2 ? (
+            <button type="submit" className="ba-button" data-variant="primary" disabled={step === 0 ? !validBasics : !validMembers}>
+              {t('setup.continue')}
+            </button>
+          ) : (
+            <button type="submit" className="ba-button" data-variant="primary" disabled={!validCapabilities || busy}>
+              {busy ? t('setup.creating') : t('setup.create')}
+            </button>
+          )}
+        </footer>
+      </form>
+    </main>
+  )
+}
+
+function OrganizationOverview({ overview, onOpenHome, onOpenLearning, t }: {
+  overview: UiOverview
+  onOpenHome: (address: string) => void
+  onOpenLearning: () => void
+  t: DashboardProps['t']
+}) {
+  const organization = overview.organization
+  if (organization === undefined) return null
+  const homeByAddress = new Map(overview.homes.map(home => [home.address, home]))
+  const business = homeByAddress.get(organization.businessHome)
+  const assigned = new Set([
+    organization.businessHome,
+    ...organization.members.flatMap(member => [member.personalHome, member.roleHome]),
+    ...organization.capabilityHomes,
+  ])
+  const unassigned = overview.homes.filter(home => !assigned.has(home.address))
+
+  return (
+    <main className="ba-org-shell">
+      <header className="ba-org-hero">
+        <div>
+          <p className="ba-org-kicker">{t('organization.kicker')}</p>
+          <h3>{organization.name}</h3>
+          <p>{organization.mission}</p>
+          <div className="ba-org-metrics">
+            <span><strong>{organization.members.length}</strong>{t('organization.members')}</span>
+            <span><strong>{organization.capabilityHomes.length}</strong>{t('organization.capabilities')}</span>
+            <span><strong>{overview.totals.activeAssets}</strong>{t('organization.learning')}</span>
+          </div>
+        </div>
+        <button type="button" className="ba-button" data-variant="primary" onClick={onOpenLearning}>{t('organization.openLearning')}</button>
+      </header>
+
+      <section className="ba-org-map" aria-label={t('organization.map')}>
+        <div className="ba-business-node">
+          <span className="ba-node-marker" data-type="business" />
+          <div><small>{t('type.business')}</small><strong>{business?.displayName ?? organization.name}</strong><code>{organization.businessHome}</code></div>
+        </div>
+        <span className="ba-map-trunk" aria-hidden="true" />
+        <div className="ba-member-nodes">
+          {organization.members.map((member) => {
+            const personal = homeByAddress.get(member.personalHome)
+            const role = homeByAddress.get(member.roleHome)
+            return (
+              <button type="button" className="ba-org-member" onClick={() => { onOpenHome(member.personalHome) }} key={member.personalHome}>
+                <span className="ba-node-marker" data-type="personal">{initials(personal?.displayName ?? member.personalHome)}</span>
+                <span className="ba-org-member-copy">
+                  <strong>{personal?.displayName ?? member.personalHome}</strong>
+                  <span>{role?.displayName ?? member.roleHome}</span>
+                  <code>{member.personalHome}</code>
+                </span>
+                <span className="ba-role-ribbon"><i className="ba-node-marker" data-type="role" />{t('organization.roleHome')}</span>
+              </button>
+            )
+          })}
+        </div>
+        {organization.capabilityHomes.length > 0 ? (
+          <div className="ba-capability-rail">
+            <span className="ba-capability-label">{t('organization.capabilityRail')}</span>
+            {organization.capabilityHomes.map((address) => (
+              <button type="button" onClick={() => { onOpenHome(address) }} key={address}>
+                <span className="ba-node-marker" data-type="capability" />
+                <span><strong>{homeByAddress.get(address)?.displayName ?? address}</strong><code>{address}</code></span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="ba-org-next">
+        <div><span>1</span><p><strong>{t('organization.next.select')}</strong>{t('organization.next.selectHint')}</p></div>
+        <div><span>2</span><p><strong>{t('organization.next.work')}</strong>{t('organization.next.workHint')}</p></div>
+        <div><span>3</span><p><strong>{t('organization.next.learn')}</strong>{t('organization.next.learnHint')}</p></div>
+      </section>
+      {unassigned.length > 0 ? <p className="ba-unassigned">{t('organization.unassigned', { count: unassigned.length })}</p> : null}
+    </main>
   )
 }
 
@@ -701,6 +1006,92 @@ function formatTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.valueOf())) return value
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+function teamTemplate(value: string, t: DashboardProps['t']): {
+  members: MemberDraft[]
+  capabilities: CapabilityDraft[]
+} {
+  const member = (id: string, roleId: string, nameKey: string, roleKey: string, responsibilityKey: string): MemberDraft => ({
+    id,
+    displayName: t(nameKey as 'setup.seed.productLead.name'),
+    roleId,
+    roleName: t(roleKey as 'setup.seed.productLead.role'),
+    responsibility: t(responsibilityKey as 'setup.seed.productLead.responsibility'),
+  })
+  const capability = (id: string, nameKey: string, responsibilityKey: string): CapabilityDraft => ({
+    id,
+    displayName: t(nameKey as 'setup.seed.research.name'),
+    responsibility: t(responsibilityKey as 'setup.seed.research.responsibility'),
+  })
+  if (value === 'growth') {
+    return {
+      members: [
+        member('growth-lead', 'growth-lead', 'setup.seed.growthLead.name', 'setup.seed.growthLead.role', 'setup.seed.growthLead.responsibility'),
+        member('content-strategist', 'content-strategist', 'setup.seed.content.name', 'setup.seed.content.role', 'setup.seed.content.responsibility'),
+        member('data-analyst', 'data-analyst', 'setup.seed.analyst.name', 'setup.seed.analyst.role', 'setup.seed.analyst.responsibility'),
+      ],
+      capabilities: [
+        capability('experiment-design', 'setup.seed.experiment.name', 'setup.seed.experiment.responsibility'),
+        capability('customer-insight', 'setup.seed.customer.name', 'setup.seed.customer.responsibility'),
+      ],
+    }
+  }
+  if (value === 'compact') {
+    return {
+      members: [
+        member('founder', 'business-lead', 'setup.seed.founder.name', 'setup.seed.founder.role', 'setup.seed.founder.responsibility'),
+        member('coding-agent', 'engineering', 'setup.seed.engineer.name', 'setup.seed.engineer.role', 'setup.seed.engineer.responsibility'),
+      ],
+      capabilities: [capability('product-delivery', 'setup.seed.delivery.name', 'setup.seed.delivery.responsibility')],
+    }
+  }
+  return {
+    members: [
+      member('product-lead', 'product-lead', 'setup.seed.productLead.name', 'setup.seed.productLead.role', 'setup.seed.productLead.responsibility'),
+      member('coding-agent', 'engineering', 'setup.seed.engineer.name', 'setup.seed.engineer.role', 'setup.seed.engineer.responsibility'),
+      member('research-analyst', 'research', 'setup.seed.researcher.name', 'setup.seed.researcher.role', 'setup.seed.researcher.responsibility'),
+    ],
+    capabilities: [
+      capability('research', 'setup.seed.research.name', 'setup.seed.research.responsibility'),
+      capability('product-delivery', 'setup.seed.delivery.name', 'setup.seed.delivery.responsibility'),
+    ],
+  }
+}
+
+function emptyMember(index: number, t: DashboardProps['t']): MemberDraft {
+  return {
+    id: `member-${String(index)}`,
+    displayName: t('setup.newMember'),
+    roleId: `role-${String(index)}`,
+    roleName: t('setup.newRole'),
+    responsibility: t('setup.newResponsibility'),
+  }
+}
+
+function emptyCapability(index: number, t: DashboardProps['t']): CapabilityDraft {
+  return {
+    id: `capability-${String(index)}`,
+    displayName: t('setup.newCapability'),
+    responsibility: t('setup.newCapabilityResponsibility'),
+  }
+}
+
+function safeSlug(value: string): string {
+  return value.trim().toLocaleLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+}
+
+function safeId(value: string): boolean {
+  return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value)
+}
+
+function initials(value: string): string {
+  const words = value.trim().split(/\s+/).filter(Boolean)
+  if (words.length > 1) return words.slice(0, 2).map(word => word[0]?.toLocaleUpperCase()).join('')
+  return [...(words[0] ?? '?')].slice(0, 2).join('').toLocaleUpperCase()
 }
 
 function errorMessage(error: unknown): string {

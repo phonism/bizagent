@@ -70,3 +70,63 @@ test('HomeStore rejects duplicate addresses and cross-owner files', async (t) =>
     sourceRefs: [{ type: 'session-events', sessionId: 's', fromSeq: 0, toSeq: 0 }],
   }), /Agent Home not found/)
 })
+
+test('HomeStore creates and reloads a complete organization graph', async (t) => {
+  const root = await makeTempDir('bizagent-organization-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new HomeStore(root)
+  await store.initialize()
+
+  const created = await store.createOrganization({
+    id: 'northstar-lab',
+    name: 'Northstar Lab',
+    mission: 'turn verified customer needs into reliable software.',
+    members: [
+      {
+        id: 'alice',
+        displayName: 'Alice',
+        roleId: 'product-lead',
+        roleName: 'Product Lead',
+        responsibility: 'Own product direction and user value.',
+      },
+      {
+        id: 'builder',
+        displayName: 'Builder',
+        roleId: 'engineering',
+        roleName: 'Engineering',
+        responsibility: 'Deliver and maintain reliable software.',
+      },
+    ],
+    capabilities: [{
+      id: 'research',
+      displayName: 'Research',
+      responsibility: 'Retain evidence-backed research methods and findings.',
+    }],
+  })
+
+  assert.equal(created.businessHome, 'business:northstar-lab')
+  assert.equal(created.members.length, 2)
+  assert.equal(created.links.length, 7)
+  assert.equal(store.listHomes().length, 6)
+  assert.match(store.getIdentity('personal:alice'), /Product Lead/)
+
+  const reloaded = new HomeStore(root)
+  await reloaded.initialize()
+  assert.deepEqual(reloaded.getOrganization(), created)
+  assert.equal(reloaded.getHome('capability:research').displayName, 'Research')
+
+  const retried = await reloaded.createOrganization({
+    id: 'northstar-lab',
+    name: 'Northstar Lab',
+    mission: 'ignored on idempotent retry',
+    members: [{
+      id: 'ignored',
+      displayName: 'Ignored',
+      roleId: 'ignored',
+      roleName: 'Ignored',
+      responsibility: 'Ignored',
+    }],
+    capabilities: [],
+  })
+  assert.deepEqual(retried, created)
+})

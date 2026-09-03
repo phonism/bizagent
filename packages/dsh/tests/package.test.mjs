@@ -23,6 +23,8 @@ test('published package declares an installable DSH bundle', async () => {
   assert.match(client, /id: "@bizagent\/dsh"/)
   assert.match(client, /sidebar\.footer\.action/)
   assert.match(client, /shell\.overlay/)
+  assert.match(client, /First-time setup/)
+  assert.match(client, /createOrganization/)
   assert.doesNotMatch(client, /node:/)
   assert.doesNotMatch(client, /\.\/service\.js/)
 
