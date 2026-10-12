@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { mkdir, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import YAML from 'yaml'
 import { z } from 'zod'
 import {
@@ -22,6 +22,7 @@ import {
   safeHomeId,
 } from './domain.js'
 import { DEFAULT_INBOX_WAKE_POLICY, InboxWakePolicySchema, type InboxWakePolicy } from './inbox-wake-policy.js'
+import { readRegularFileNoFollow } from './safe-file.js'
 
 const DIRECTORY_SCHEMA = z.object({
   schemaVersion: z.literal(1),
@@ -29,6 +30,8 @@ const DIRECTORY_SCHEMA = z.object({
     id: z.string().min(1),
     address: z.string().min(1),
     path: z.string().min(1),
+    /** Owner recorded by this store; null records "no owner". Absent in directories written before 1.0. */
+    owner: z.string().min(1).nullable().optional(),
   })),
 })
 
@@ -121,6 +124,7 @@ export class HomeStore {
   readonly organizationFile: string
   private readonly homes = new Map<HomeAddress, HomeCache>()
   private organization: Organization | undefined
+  private integrityIssues: string[] = []
   private mutationTail: Promise<unknown> = Promise.resolve()
 
   constructor(root: string) {
@@ -140,6 +144,8 @@ export class HomeStore {
   }
 
   async reload(): Promise<void> {
+    this.integrityIssues = []
+    const recordedOwners = await this.readRecordedOwners()
     this.homes.clear()
     this.organization = undefined
     const entries = await readdir(this.homesRoot, { withFileTypes: true })
@@ -156,6 +162,7 @@ export class HomeStore {
       if (this.homes.has(cache.home.address)) {
         throw new Error(`duplicate Agent Home address: ${cache.home.address}`)
       }
+      this.keepRecordedOwner(cache, recordedOwners)
       this.homes.set(cache.home.address, cache)
     }
     await this.loadOrganization()
@@ -189,9 +196,8 @@ export class HomeStore {
   async readInboxWakePolicy(address: string): Promise<InboxWakePolicy> {
     const file = join(this.requireHome(parseHomeAddress(address)).directory, 'inbox.json')
     try {
-      const info = await lstat(file)
-      if (!info.isFile() || info.size > 4096) return DEFAULT_INBOX_WAKE_POLICY
-      return InboxWakePolicySchema.parse(JSON.parse(await readFile(file, 'utf8')))
+      const bytes = await readRegularFileNoFollow(file, { maxBytes: 4096 })
+      return InboxWakePolicySchema.parse(JSON.parse(bytes.toString('utf8')))
     } catch { return DEFAULT_INBOX_WAKE_POLICY }
   }
 
@@ -517,14 +523,63 @@ export class HomeStore {
         }
       }
     }
+    issues.push(...this.integrityIssues)
     return { ok: issues.length === 0, root: this.root, homeCount: this.homes.size, assetCount, issues }
+  }
+
+  /**
+   * Owners recorded in directory.yaml when this store last wrote it. The file sits at the store
+   * root, outside each Home's own Workspace directory, so an Agent working in its Home cannot
+   * change its owner by editing home.yaml alone.
+   */
+  private async readRecordedOwners(): Promise<Map<string, string | null>> {
+    const owners = new Map<string, string | null>()
+    let raw: string
+    try {
+      raw = (await readRegularFileNoFollow(join(this.root, 'directory.yaml'))).toString('utf8')
+    } catch (error) {
+      if (!isNotFound(error)) {
+        this.integrityIssues.push('directory.yaml could not be read; Agent Home owners were not verified')
+      }
+      return owners
+    }
+    const parsed = DIRECTORY_SCHEMA.safeParse(YAML.parse(raw))
+    if (!parsed.success) {
+      this.integrityIssues.push('directory.yaml is malformed; Agent Home owners were not verified')
+      return owners
+    }
+    for (const entry of parsed.data.homes) {
+      if (entry.owner !== undefined) owners.set(entry.address, entry.owner)
+    }
+    return owners
+  }
+
+  /** Refuse an owner change made in agent-writable home.yaml; keep the recorded owner and report it. */
+  private keepRecordedOwner(cache: HomeCache, recordedOwners: ReadonlyMap<string, string | null>): void {
+    if (!recordedOwners.has(cache.home.address)) return
+    const recorded = recordedOwners.get(cache.home.address) ?? undefined
+    if (cache.home.owner === recorded) return
+    this.integrityIssues.push(`Agent Home ${cache.home.address}: home.yaml owner differs from the recorded owner; `
+      + 'the change was refused and the recorded owner is kept')
+    const { owner: _ignored, ...rest } = cache.home
+    cache.home = AgentHomeSchema.parse(recorded === undefined ? rest : { ...rest, owner: recorded }) as AgentHome
   }
 
   private async loadHome(directory: string): Promise<HomeCache> {
     this.assertWithinRoot(directory)
-    const homeRaw = YAML.parse(await readFile(join(directory, 'home.yaml'), 'utf8'))
+    const homeRaw = YAML.parse(await readManagedText(join(directory, 'home.yaml')))
     let home = AgentHomeSchema.parse(homeRaw) as AgentHome
-    const identity = normalizeBody(await readFile(join(directory, 'identity.md'), 'utf8'))
+    // home.yaml lives in the Home's writable Workspace: its identity fields must match the address.
+    if (home.id !== safeHomeId(home.address)) {
+      throw new Error(`home.yaml id does not match its address ${home.address}`)
+    }
+    if (basename(directory) !== home.id) {
+      throw new Error(`Home directory name does not match home.yaml id ${home.id}`)
+    }
+    if (home.type !== homeTypeOf(home.address)) {
+      throw new Error(`home.yaml type ${home.type} does not match its address ${home.address}`)
+    }
+    const identity = normalizeBody(await readManagedText(join(directory, 'identity.md')))
     const assets = new Map<string, StoredAsset>()
     for (const [kind, child] of Object.entries(KIND_DIRECTORY) as [Exclude<AssetKind, 'identity'>, string][]) {
       const assetDirectory = join(directory, child)
@@ -533,7 +588,7 @@ export class HomeStore {
       for (const entry of entries) {
         if (!entry.isFile() || !entry.name.endsWith('.md')) continue
         const bodyPath = join(assetDirectory, entry.name)
-        const asset = parseAsset(await readFile(bodyPath, 'utf8'), bodyPath)
+        const asset = parseAsset(await readManagedText(bodyPath), bodyPath)
         if (asset.kind !== kind) throw new Error(`${bodyPath}: kind ${asset.kind} does not match directory ${kind}`)
         if (asset.ownerAddress !== home.address) throw new Error(`${bodyPath}: owner does not match ${home.address}`)
         if (assets.has(asset.id)) throw new Error(`${bodyPath}: duplicate asset id ${asset.id}`)
@@ -556,7 +611,7 @@ export class HomeStore {
   private async loadOrganization(): Promise<void> {
     let raw: unknown
     try {
-      raw = YAML.parse(await readFile(this.organizationFile, 'utf8'))
+      raw = YAML.parse(await readManagedText(this.organizationFile))
     } catch (error) {
       if (isNotFound(error)) return
       throw error
@@ -680,6 +735,7 @@ export class HomeStore {
           id: cache.home.id,
           address: cache.home.address,
           path: relative(this.root, cache.directory),
+          owner: cache.home.owner ?? null,
         }))
         .sort((a, b) => a.address.localeCompare(b.address)),
     })
@@ -720,6 +776,11 @@ function normalizeLabel(value: string, label: string): string {
   if (normalized.length === 0) throw new Error(`${label} must not be empty`)
   if (normalized.length > 200) throw new Error(`${label} must be at most 200 characters`)
   return normalized
+}
+
+/** Managed files are read without following a final symlink. */
+async function readManagedText(path: string): Promise<string> {
+  return (await readRegularFileNoFollow(path)).toString('utf8')
 }
 
 function isNotFound(error: unknown): boolean {

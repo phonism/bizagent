@@ -226,8 +226,9 @@ try {
   await mkdir(workerDir)
   const homeStore = new HomeStore(join(root, 'bizagent'))
   await homeStore.initialize()
-  await homeStore.createHome({ address: 'personal:default' })
-  await homeStore.createHome({ address: 'role:worker' })
+  // Automatic worker start requires the requester and assignee Homes to share one explicit owner.
+  await homeStore.createHome({ address: 'personal:default', owner: 'smoke-owner' })
+  await homeStore.createHome({ address: 'role:worker', owner: 'smoke-owner' })
   await homeStore.createAsset({ id: assetId, ownerAddress: 'role:worker', kind: 'method',
     description: 'Verify assigned work using the smoke method.', body: 'Check the assignment before delivery.',
     status: 'active', sourceRefs: [{ type: 'document', uri: 'smoke:worker-method', digest: 'local-smoke' }] })

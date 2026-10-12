@@ -1,5 +1,6 @@
 import type { HomeAddress, ProjectSeatAddress } from './domain.js'
 import type { FormalProject, ProjectSeat } from './project-ledger.js'
+import { inlineText, untrustedBlock } from './untrusted-text.js'
 
 export interface ProjectSeatContext {
   projectId: string
@@ -28,16 +29,19 @@ export function projectSeatContext(project: FormalProject, seat: ProjectSeat): P
 export function renderProjectSeatContext(context: ProjectSeatContext): string {
   return [
     '# Project Seat context',
-    `Project ID: ${context.projectId}`,
+    `Project ID: ${inlineText(context.projectId)}`,
     `Project revision: ${context.projectRevision}`,
-    `Project status: ${context.status}`,
-    `Project title: ${context.title}`,
-    `Project lead: ${context.lead}`,
-    `Your Seat address: ${context.seatAddress}`,
-    `Your execution Home: ${context.homeAddress}`,
-    `Your responsibility: ${context.responsibility}`,
-    `Project goal: ${context.goal}`,
-    `Done when: ${context.doneWhen}`,
+    `Project status: ${inlineText(context.status)}`,
+    `Project title: ${inlineText(context.title)}`,
+    `Project lead: ${inlineText(context.lead)}`,
+    `Your Seat address: ${inlineText(context.seatAddress)}`,
+    `Your execution Home: ${inlineText(context.homeAddress)}`,
+    '',
+    untrustedBlock('Your responsibility', context.responsibility),
+    '',
+    untrustedBlock('Project goal', context.goal),
+    '',
+    untrustedBlock('Done when', context.doneWhen),
     '',
     'This Session uses the execution Home above. The Seat address routes and attributes Project messages; it does not change tool authority.',
     'Read the current Project with bizagent_project_read before relying on its Work or artifacts. The revision above may become stale.',

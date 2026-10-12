@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
+import { guardLocalRoute } from './route-guard.js'
 import type { BizAgentService } from './service.js'
 
 export const HUMAN_INBOX_API = '/api/bizagent/human-inbox'
@@ -90,12 +91,13 @@ export function createHumanInboxHttpHandler(service: BizAgentService, options: H
   }
 }
 
+/** Mount on the local DSH web server behind the loopback Host / same-origin route guard. */
 export function registerHumanInboxRoute(webServer: {
   register: (route: { kind: 'exact'; path: string;
     handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }) => () => void
 }, service: BizAgentService, options: HumanInboxRouteOptions): () => void {
   return webServer.register({ kind: 'exact', path: HUMAN_INBOX_API,
-    handler: createHumanInboxHttpHandler(service, options) })
+    handler: guardLocalRoute(createHumanInboxHttpHandler(service, options)) })
 }
 
 class RequestError extends Error {}

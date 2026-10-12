@@ -1003,3 +1003,39 @@ test('creating an organization places every Home under the DSH Workspace and per
   assert.equal(reloaded.getOrganization().id, 'acme')
   assert.equal(reloaded.getHome('role:engineering').displayName, 'Engineering')
 })
+
+test('Session evidence stays readable only from the Home its Session is bound to', async t => {
+  const root = await makeTempDir('bizagent-evidence-home-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const runtime = await createDemoRuntime()
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'personal:alice' })
+  await store.createHome({ address: 'role:growth-strategy' })
+  const roleCwd = `${root}/role`
+  const service = new BizAgentService(store, runtime.ledger, {
+    homeRoot: root, defaultHome: 'personal:alice', autoCreateDefaultHome: false,
+    workspaceHomes: [{ root: roleCwd, address: 'role:growth-strategy' }],
+    budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 },
+  }, runtime.sessionQuery)
+  await service.initialize()
+  t.after(() => service.close())
+  const alice = runtime.agent('alice-evidence', root, 'Private detail: the customer list is in secret.csv.')
+  const remembered = await service.remember(alice, 'remember-call', {
+    description: 'Check cohorts weekly', body: 'Compare weekly cohorts before acting.' })
+  const own = await service.readEvidence(alice, { assetId: remembered.asset.id })
+  assert.match(JSON.stringify(own.events), /secret\.csv/)
+
+  const proposed = await service.proposeMemory(alice, 'propose-call', {
+    toAddress: 'role:growth-strategy', proposedKind: 'method',
+    description: 'Review cohorts weekly', body: 'Run a weekly cohort review before changing strategy.' })
+  await service.decideProposalAsHuman({ ownerAddress: 'role:growth-strategy', proposalId: proposed.proposal.id,
+    action: 'accept', reviewerId: 'human-owner', authorityRef: 'role-owner:human-owner',
+    decision: 'Accepted after review.' })
+  const accepted = store.listAssets('role:growth-strategy')[0]
+  assert.equal(accepted.sourceRefs[0].type, 'session-events')
+  assert.equal(accepted.sourceRefs[0].sessionId, 'alice-evidence')
+  const role = runtime.agent('role-evidence', roleCwd, 'Check the evidence for this method.')
+  await assert.rejects(() => service.readEvidence(role, { assetId: accepted.id }),
+    /not visible to the current Home/)
+})

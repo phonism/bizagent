@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -42,7 +42,9 @@ test('local DSH human host accepts a private Bearer token and checks the current
         reviewerId: input.reviewerId, authorityRef: input.authorityRef }
     },
     projectLedger: { get: id => ({ id, lead: id === 'alice-project' ? 'personal:alice' : 'personal:bob' }) },
+    projectReviewCalls: 0,
     async reviewProjectAsHuman(principal, input, authorize) {
+      this.projectReviewCalls += 1
       const project = { id: input.projectId, lead: input.projectId === 'alice-project'
         ? 'personal:alice' : 'personal:bob', status: 'awaiting_acceptance',
         revision: input.expectedRevision, currentClaimId: input.claimId }
@@ -78,7 +80,8 @@ test('local DSH human host accepts a private Bearer token and checks the current
     cleanup()
     assert.equal(routes.size, 0)
   })
-  const url = `http://127.0.0.1:${server.address().port}/api/bizagent/project-review`
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const url = `${origin}/api/bizagent/project-review`
   const statusUrl = `http://127.0.0.1:${server.address().port}/api/bizagent/local-human/status`
   assert.equal((await fetch(statusUrl)).status, 401)
   const status = await fetch(statusUrl, { headers: { Authorization: `Bearer ${token}` } })
@@ -86,7 +89,7 @@ test('local DSH human host accepts a private Bearer token and checks the current
   assert.deepEqual(await status.json(), { userId: 'alice' })
   const sessionUrl = `http://127.0.0.1:${server.address().port}/api/bizagent/agent-session`
   const openSession = (body, credential) => fetch(sessionUrl, { method: 'POST',
-    headers: { 'Content-Type': 'application/json',
+    headers: { 'Content-Type': 'application/json', Origin: origin,
       ...(credential ? { Authorization: `Bearer ${credential}` } : {}) },
     body: JSON.stringify(body) })
   assert.equal((await openSession({ homeAddress: 'personal:alice' })).status, 401)
@@ -99,7 +102,7 @@ test('local DSH human host accepts a private Bearer token and checks the current
   const review = projectId => JSON.stringify({ projectId, claimId: 'claim-1',
     expectedRevision: 2, decision: 'accept', reason: 'Checked by the owner.' })
   const send = (body, credential) => fetch(url, { method: 'POST',
-    headers: { 'Content-Type': 'application/json',
+    headers: { 'Content-Type': 'application/json', Origin: origin,
       ...(credential ? { Authorization: `Bearer ${credential}` } : {}) }, body })
   assert.equal((await send(review('alice-project'))).status, 401)
   assert.equal((await send(review('alice-project'), 'x'.repeat(64))).status, 401)
@@ -108,7 +111,7 @@ test('local DSH human host accepts a private Bearer token and checks the current
   assert.equal((await allowed.json()).review.reviewedByPrincipal, 'alice')
   assert.equal((await send(review('bob-project'), token)).status, 403)
   const sharedUrl = `http://127.0.0.1:${server.address().port}/api/bizagent/shared-knowledge/decision`
-  const sharedHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+  const sharedHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, Origin: origin }
   const sharedDecision = proposalId => JSON.stringify({ proposalId, action: 'accept', decision: 'Approved.' })
   assert.equal((await fetch(sharedUrl)).status, 401)
   const lineList = await fetch(sharedUrl, { headers: sharedHeaders })
@@ -127,6 +130,52 @@ test('local DSH human host accepts a private Bearer token and checks the current
     body: sharedDecision('common-proposal') })
   assert.equal(commonDecision.status, 200)
   assert.match((await commonDecision.json()).authorityRef, /common:common-proposal:accept/)
+
+  // Every plugin route keeps the loopback Host / same-origin fence even with a valid Bearer token.
+  const port = server.address().port
+  const raw = (path, { method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method, headers }, res => {
+      let text = ''
+      res.setEncoding('utf8')
+      res.on('data', chunk => { text += chunk })
+      res.on('end', () => resolve({ status: res.statusCode, body: text }))
+    })
+    req.on('error', reject)
+    req.end(body)
+  })
+  const rebinding = `rebind.attacker.example:${port}`
+  const bearer = { Authorization: `Bearer ${token}` }
+  for (const path of ['/api/bizagent/local-human/status', '/api/bizagent/human-inbox',
+    '/api/bizagent/shared-knowledge/decision', '/api/bizagent/project-review?projectId=alice-project',
+    '/api/bizagent/v1/proposals/decision?ownerAddress=personal%3Aalice&proposalId=p']) {
+    const read = await raw(path, { headers: { ...bearer, Host: rebinding } })
+    assert.equal(read.status, 403, path)
+    assert.equal(JSON.parse(read.body).error.code, 'untrusted-host')
+    const crossSite = await raw(path, { headers: { ...bearer, Host: `127.0.0.1:${port}`,
+      'Sec-Fetch-Site': 'cross-site' } })
+    assert.equal(crossSite.status, 403, path)
+  }
+  const reviewsBefore = service.projectReviewCalls
+  const rebindReview = await raw('/api/bizagent/project-review', { method: 'POST',
+    headers: { ...bearer, Host: rebinding, Origin: `http://${rebinding}`, 'Content-Type': 'application/json' },
+    body: review('alice-project') })
+  assert.equal(rebindReview.status, 403)
+  const noOriginReview = await raw('/api/bizagent/project-review', { method: 'POST',
+    headers: { ...bearer, Host: `127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+    body: review('alice-project') })
+  assert.equal(noOriginReview.status, 403)
+  assert.equal(JSON.parse(noOriginReview.body).error.code, 'origin-rejected')
+  assert.equal(service.projectReviewCalls, reviewsBefore)
+  const noOriginSession = await raw('/api/bizagent/agent-session', { method: 'POST',
+    headers: { ...bearer, Host: `127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ homeAddress: 'personal:alice' }) })
+  assert.equal(noOriginSession.status, 403)
+  const sameOrigin = await raw('/api/bizagent/project-review', { method: 'POST',
+    headers: { ...bearer, Host: `127.0.0.1:${port}`, Origin: origin, 'Content-Type': 'application/json' },
+    body: review('alice-project') })
+  assert.equal(sameOrigin.status, 200)
+  assert.equal(service.projectReviewCalls, reviewsBefore + 1)
+
   await chmod(tokenFile, 0o644)
   await assert.rejects(() => apply({ bizagent: service, webServer: { host: '127.0.0.1' }, effect() {} }),
     /private regular file/)

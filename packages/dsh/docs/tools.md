@@ -209,9 +209,11 @@ Seat 职责与地址，并要求读取最新 Project。实际执行仍绑定对�
 | `bizagent_work_cancel` | `work_id`、`reason` | 无 | 仅请求方可取消 open Work，通知执行方 |
 
 Work 使用独立的 DSH `bizagent_work` 域。创建时先持久化责任，再经 Inbox 发请求通知；如果目标 Home
-配置了 `workspaceHomes` 映射，Work 会冻结 `autoStart: true`；插件在通知送达后用 DSH Agent 工厂创建独立 worker Session，将确定的
+配置了 `workspaceHomes` 映射，且请求方与目标 Home 有相同的非空 owner，Work 会冻结 `autoStart: true`；插件在通知送达后用 DSH Agent 工厂创建独立 worker Session，将确定的
 Session ID 与工作目录预留在 Work，并投递正式工作提示。已经存在的持久 Session 会用 DSH `resume()` 恢复；
-启动失败会在派发结果中单独报告，责任仍可由请求方用 `work_start` 重试。没有映射目录时，目标 Home 在
+启动失败会在派发结果中单独报告，责任仍可由请求方用 `work_start` 重试。owner 不同时 Work 照常创建，
+但不启动 worker，派发结果的 `workerLaunch.reason` 为 `different-owner`；`work_start` 和重启恢复也不会为它
+启动 worker。owner 不同或没有映射目录时，目标 Home 在
 将执行的普通 Session 中调用 `work_accept`，从 `open` 进入 `accepted` 并冻结 worker Session ID。其他
 Session 不能替它完成或抢走责任；结果提交时先把
 唯一结果正文和消息 ID 预留为 `completing`，成功入箱后转 `completed`。并发提交或失败重试只能采用已预留的

@@ -6,6 +6,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerHumanInboxRoute } from './human-inbox-transport.js'
 import { registerProjectReviewRoute } from './project-review-transport.js'
 import { registerProposalReviewRoute } from './proposal-review-transport.js'
+import { guardLocalRoute } from './route-guard.js'
 import { registerSharedKnowledgeReviewRoute } from './shared-knowledge-review-transport.js'
 import { BIZAGENT_AGENT_SESSION_API, BIZAGENT_LOCAL_HUMAN_STATUS_API } from './ui-contract.js'
 
@@ -53,7 +54,7 @@ export async function apply(ctx: Context): Promise<void> {
     principal.userId === userId
   const disposers = [
     ctx.webServer.register({ kind: 'exact', path: BIZAGENT_LOCAL_HUMAN_STATUS_API,
-      handler: async (request, response) => {
+      handler: guardLocalRoute(async (request, response) => {
         response.setHeader('Cache-Control', 'no-store')
         response.setHeader('Content-Type', 'application/json; charset=utf-8')
         response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -63,9 +64,9 @@ export async function apply(ctx: Context): Promise<void> {
         const principal = authenticate(request)
         response.statusCode = principal ? 200 : 401
         response.end(JSON.stringify(principal ? { userId: principal.userId } : { error: 'authentication-required' }))
-      } }),
+      }) }),
     ctx.webServer.register({ kind: 'exact', path: BIZAGENT_AGENT_SESSION_API,
-      handler: async (request, response) => {
+      handler: guardLocalRoute(async (request, response) => {
         response.setHeader('Cache-Control', 'no-store')
         response.setHeader('Content-Type', 'application/json; charset=utf-8')
         response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -109,7 +110,7 @@ export async function apply(ctx: Context): Promise<void> {
               workspacePath: ctx.bizagent.store.homeWorkspacePath(result.homeAddress) })
           }
         } catch { reply(409, { error: 'agent-session-unavailable' }) }
-      } }),
+      }) }),
     registerProjectReviewRoute(ctx.webServer, ctx.bizagent, {
       authenticateUser: authenticate,
       authorizeMutation,

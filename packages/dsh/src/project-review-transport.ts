@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
 import { stableId } from './domain.js'
 import type { FormalProject } from './project-ledger.js'
+import { guardLocalRoute } from './route-guard.js'
 import type { BizAgentService } from './service.js'
 import { BIZAGENT_PROJECT_REVIEW_API } from './ui-contract.js'
 import { ProjectSnapshotStore, WorkSnapshotStore } from './worklog-snapshot.js'
@@ -137,12 +138,13 @@ export function createProjectReviewHttpHandler(service: BizAgentService,
   }
 }
 
+/** Mount on the local DSH web server behind the loopback Host / same-origin route guard. */
 export function registerProjectReviewRoute(webServer: {
   register: (route: { kind: 'exact'; path: string;
     handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }) => () => void
 }, service: BizAgentService, options: ProjectReviewRouteOptions): () => void {
   return webServer.register({ kind: 'exact', path: BIZAGENT_PROJECT_REVIEW_API,
-    handler: createProjectReviewHttpHandler(service, options) })
+    handler: guardLocalRoute(createProjectReviewHttpHandler(service, options)) })
 }
 
 class RequestError extends Error {}

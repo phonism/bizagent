@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
 import { test } from 'node:test'
 import { HumanNotificationWebhook } from '../lib/human-notification-webhook.js'
 
@@ -34,6 +35,7 @@ test('webhook requires secure endpoint and explicit provider proof for sent or r
   assert.deepEqual(await webhook.notify(request), { status: 'unknown' })
   assert.equal(captured[0].url, 'https://notify.example/push')
   assert.equal(captured[0].init.headers.authorization, 'Bearer secret')
+  assert.equal(captured[0].init.redirect, 'error')
   assert.deepEqual(JSON.parse(captured[0].init.body), { schemaVersion: 1, ...request })
 })
 
@@ -48,4 +50,27 @@ test('webhook treats network errors and unverifiable credentials as unknown outc
     fetch: async () => { throw new Error('must not call provider without credentials') },
   })
   await assert.rejects(() => unavailable.notify(request), /credential is unavailable/)
+})
+
+test('webhook never follows a redirect, so the credential cannot reach another target', async t => {
+  const redirectedRequests = []
+  const target = createServer((req, res) => {
+    redirectedRequests.push(req.headers.authorization)
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ status: 'sent', receiptId: 'from-redirect-target' }))
+  })
+  const endpoint = createServer((_req, res) => {
+    res.writeHead(307, { Location: `http://127.0.0.1:${target.address().port}/collect` })
+    res.end()
+  })
+  await Promise.all([target, endpoint].map(server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve))))
+  t.after(() => Promise.all([target, endpoint].map(server => new Promise(resolve => {
+    server.closeAllConnections()
+    server.close(resolve)
+  }))))
+  const webhook = new HumanNotificationWebhook({
+    endpoint: `http://127.0.0.1:${endpoint.address().port}/push`, authorization: () => 'Bearer secret',
+  })
+  assert.deepEqual(await webhook.notify(request), { status: 'unknown' })
+  assert.deepEqual(redirectedRequests, [])
 })

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
+import { guardLocalRoute } from './route-guard.js'
 import type { BizAgentService } from './service.js'
 import type { SharedKnowledgeProposal } from './shared-knowledge.js'
 
@@ -75,9 +76,10 @@ export function createSharedKnowledgeReviewHttpHandler(service: BizAgentService,
   }
 }
 
+/** Mount on the local DSH web server behind the loopback Host / same-origin route guard. */
 export function registerSharedKnowledgeReviewRoute(webServer: { register: (route: { kind: 'exact';
   path: string; handler: (request: IncomingMessage, response: ServerResponse) => Promise<void> }) => () => void },
 service: BizAgentService, options: SharedKnowledgeReviewOptions): () => void {
   return webServer.register({ kind: 'exact', path: SHARED_KNOWLEDGE_REVIEW_API,
-    handler: createSharedKnowledgeReviewHttpHandler(service, options) })
+    handler: guardLocalRoute(createSharedKnowledgeReviewHttpHandler(service, options)) })
 }

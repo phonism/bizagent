@@ -12,6 +12,7 @@ import {
   nowIso,
   parseHomeAddress,
 } from './domain.js'
+import { rejectUntrustedRequest } from './route-guard.js'
 import type { BizAgentService } from './service.js'
 import {
   BIZAGENT_UI_API,
@@ -231,6 +232,10 @@ export class BizAgentUiFacade {
 }
 
 export function apply(ctx: Context, _config: Config = {}): void {
+  if (ctx.webServer.host !== '127.0.0.1') {
+    throw new Error('BizAgent UI routes require DSH Web to bind 127.0.0.1; '
+      + 'serving them on other interfaces is unsupported')
+  }
   const facade = new BizAgentUiFacade(ctx.bizagent)
   const directorySession = async (req: IncomingMessage) => {
     const url = new URL(req.url ?? '', 'http://bizagent.local')
@@ -384,38 +389,33 @@ async function route(
   execute: () => unknown | Promise<unknown>,
 ): Promise<void> {
   setCommonHeaders(res)
+  if (rejectUntrustedRequest(req, res)) return
   if (req.method !== method) {
     res.setHeader('Allow', method)
     writeJson(res, 405, { error: { code: 'method-not-allowed', message: `Use ${method} for this endpoint.` } })
     return
   }
-  if (method === 'POST' && !sameOrigin(req)) {
-    writeJson(res, 403, { error: { code: 'origin-rejected', message: 'Mutation requests must come from this DSH origin.' } })
-    return
-  }
   try {
     writeJson(res, 200, await execute())
   } catch (error) {
-    const known = error instanceof UiRequestError
-    const validation = error instanceof z.ZodError
-    writeJson(res, known || validation ? 400 : 409, {
-      error: {
-        code: known ? error.code : validation ? 'invalid-request' : 'operation-rejected',
-        message: error instanceof Error ? error.message : String(error),
-      },
-    })
+    // Never echo raw exception text: it can carry absolute paths or another Home's details.
+    if (error instanceof UiRequestError) {
+      writeJson(res, 400, { error: { code: error.code, message: error.message } })
+    } else if (error instanceof z.ZodError) {
+      writeJson(res, 400, { error: { code: 'invalid-request', message: validationMessage(error) } })
+    } else {
+      writeJson(res, 409, { error: { code: 'operation-rejected',
+        message: 'The request could not be completed. Refresh and check the current state.' } })
+    }
   }
 }
 
-function sameOrigin(req: IncomingMessage): boolean {
-  const origin = req.headers.origin
-  const host = req.headers.host
-  if (origin === undefined || host === undefined) return false
-  try {
-    return new URL(origin).host === host
-  } catch {
-    return false
-  }
+/** Schema-authored issue text only; Zod issues do not include the rejected input values. */
+function validationMessage(error: z.ZodError): string {
+  const issue = error.issues[0]
+  if (issue === undefined) return 'The request is invalid.'
+  const path = issue.path.filter(part => typeof part === 'string' || typeof part === 'number').join('.')
+  return `Invalid request${path ? ` field ${path}` : ''}: ${issue.message}`
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {

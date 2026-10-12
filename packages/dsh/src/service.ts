@@ -1,6 +1,6 @@
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { lstat, realpath, stat } from 'node:fs/promises'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
@@ -61,6 +61,8 @@ import { WorklogLedger, type WorklogRevision } from './worklog-ledger.js'
 import { WorklogSnapshotStore, ProjectSnapshotStore, WorkSnapshotStore, LearningSnapshotStore,
   MAX_WORKLOG_FILE_BYTES } from './worklog-snapshot.js'
 import { ExplicitCorrectionTrigger, type LearningTrigger } from './learning-trigger.js'
+import { assertBodyText, assertSingleLineText } from './untrusted-text.js'
+import { readRegularFileNoFollow } from './safe-file.js'
 import {
   type ActiveOrganizationLocation,
   organizationLocation,
@@ -809,7 +811,7 @@ export class BizAgentService {
         || await realpath(file) !== file) {
         throw new Error(`learning library file is outside the real Home root: ${file}`)
       }
-      const info = await stat(file)
+      const info = await lstat(file)
       if (!info.isFile() || info.size > MAX_WORKLOG_FILE_BYTES) {
         throw new Error(`learning library file is not a regular file under 8 MiB: ${path}`)
       }
@@ -817,7 +819,8 @@ export class BizAgentService {
       if (totalBytes > 64 * 1024 * 1024) {
         throw new Error('learning library snapshot exceeds 64 MiB')
       }
-      const bytes = await readFile(file)
+      const bytes = await readRegularFileNoFollow(file, { maxBytes: MAX_WORKLOG_FILE_BYTES,
+        expected: { dev: info.dev, ino: info.ino } })
       if (bytes.length !== info.size) throw new Error(`learning library file changed while reading: ${path}`)
       const captured = await snapshots.retain(bytes)
       retained.push({ path, sha256: captured.sha256, bytes: captured.bytes })
@@ -828,7 +831,7 @@ export class BizAgentService {
     for (const file of retained) {
       const absolute = join(root, file.path)
       if (await realpath(absolute) !== absolute) throw new Error(`learning library file changed path: ${file.path}`)
-      const bytes = await readFile(absolute)
+      const bytes = await readRegularFileNoFollow(absolute, { maxBytes: MAX_WORKLOG_FILE_BYTES })
       if (bytes.length !== file.bytes
         || createHash('sha256').update(bytes).digest('hex') !== file.sha256) {
         throw new Error(`learning library file changed during snapshot: ${file.path}`)
@@ -1274,6 +1277,12 @@ export class BizAgentService {
     if (!['ordinary', 'conclusion', 'escalation', 'work-request', 'work-result', 'work-notice'].includes(kind)) {
       throw new Error('unknown Inbox message kind')
     }
+    // Work notices are rebuilt from Work fields that were checked when the Work was written.
+    if (!['work-request', 'work-result', 'work-notice'].includes(kind)) {
+      assertSingleLineText(subject, 'Inbox subject')
+      assertBodyText(body, 'Inbox body')
+      for (const ref of contextRefs) assertSingleLineText(ref, 'Inbox context reference')
+    }
     if (kind === 'escalation' && (!to.some(isUserAddress) || due === undefined)) {
       throw new Error('Inbox escalation requires a primary user:<id> recipient and ISO due')
     }
@@ -1654,6 +1663,8 @@ export class BizAgentService {
     if (!subject || subject.length > 200 || !body || body.length > 16000) {
       throw new Error('Inbox human reply requires a subject and body within Inbox limits')
     }
+    assertSingleLineText(subject, 'Inbox subject')
+    assertBodyText(body, 'Inbox body')
     if (!input.idempotencyKey || input.idempotencyKey.length > 128) {
       throw new Error('Inbox human reply requires an idempotency key of 1 to 128 characters')
     }
@@ -2212,6 +2223,8 @@ export class BizAgentService {
     if (!acceptanceCriteria || acceptanceCriteria.length > 4000) {
       throw new Error('Work acceptance criteria must contain 1 to 4000 characters')
     }
+    assertSingleLineText(goal, 'Work goal')
+    assertBodyText(acceptanceCriteria, 'Work acceptance criteria')
     if (!idempotencyKey || idempotencyKey.length > 128) throw new Error('Work idempotency key must contain 1 to 128 characters')
     if (input.projectId !== undefined && (!projectId || projectId.length > 128)) {
       throw new Error('Work project ID must contain 1 to 128 characters')
@@ -2240,7 +2253,7 @@ export class BizAgentService {
         ...(projectId !== undefined ? { projectId } : {}),
         status: 'open',
         requestMessageId: stableId('inbox', `${binding.homeAddress}:work:${id}:request`),
-        autoStart: this.config.workspaceHomes.some(mapping => mapping.address === assignee),
+        autoStart: this.workAutoStartBlock(binding.homeAddress, assignee) === undefined,
         ...(Object.keys(workerOptions).length > 0 ? { workerOptions } : {}),
         createdAt: now, updatedAt: now,
       }
@@ -2252,6 +2265,27 @@ export class BizAgentService {
     this.requireWorkNotification(notification, work.requestMessageId, work.returnToSessionId,
       work.assignee, 'Work request')
     return { work: ledger.get(work.id), notification }
+  }
+
+  /**
+   * Why a worker Session must not be started automatically for this Work, or undefined when it may.
+   * Like Inbox wake, DSH has no per-start execution principal, so only Homes with the same explicit
+   * owner may start work in each other's mapped Workspace. Other Work stays open for the
+   * assignee's own Sessions.
+   */
+  workAutoStartBlock(requester: HomeAddress, assignee: HomeAddress): 'no-workspace-mapping' | 'different-owner' | undefined {
+    if (!this.config.workspaceHomes.some(mapping => mapping.address === assignee)) return 'no-workspace-mapping'
+    return this.sameHomeOwner(requester, assignee) ? undefined : 'different-owner'
+  }
+
+  /** True only when both Homes exist and carry the same non-empty owner. */
+  sameHomeOwner(left: HomeAddress, right: HomeAddress): boolean {
+    try {
+      const owner = this.store.getHome(left).owner?.trim()
+      return owner !== undefined && owner !== '' && this.store.getHome(right).owner?.trim() === owner
+    } catch {
+      return false
+    }
   }
 
   async listWork(agent: Agent, input: {
@@ -2381,6 +2415,7 @@ export class BizAgentService {
     const binding = await this.requireDurableBinding(agent)
     const reason = input.reason.trim()
     if (!reason || reason.length > 2000) throw new Error('Work cancellation reason must contain 1 to 2000 characters')
+    assertBodyText(reason, 'Work cancellation reason')
     const cancelled = await ledger.withWrite(async () => {
       const current = ledger.get(input.workId)
       if (current === undefined) throw new Error(`Work not found: ${input.workId}`)
@@ -2424,6 +2459,8 @@ export class BizAgentService {
     }
     if (!subject || subject.length > 200) throw new Error('Work result subject must contain 1 to 200 characters')
     if (!body || body.length > 15000) throw new Error('Work result body must contain 1 to 15000 characters')
+    assertSingleLineText(subject, 'Work result subject')
+    assertBodyText(body, 'Work result body')
     const reserved = await ledger.withWrite(async () => {
       const current = ledger.get(input.workId)
       if (current === undefined) throw new Error(`Work not found: ${input.workId}`)
@@ -3427,6 +3464,11 @@ export class BizAgentService {
     if (ref.type !== 'session-events') {
       throw new Error(`evidence type ${ref.type} is not readable in P0 Lite`)
     }
+    // An accepted proposal copies the proposer's evidence refs into this Home's asset. Session
+    // events stay readable only from the Home the Session is bound to; there is no sharing grant.
+    if (this.ledger.getBinding(ref.sessionId)?.homeAddress !== binding.homeAddress) {
+      throw new Error('Session evidence is not visible to the current Home: the Session is bound to another Home')
+    }
     if (this.sessionQuery === undefined) throw new Error('DSH sessionQuery is unavailable')
     if (ref.fromSeq > ref.toSeq) throw new Error('evidence range is reversed')
     const snapshot = await this.sessionQuery.readSession(ref.sessionId as SessionId)
@@ -4016,12 +4058,20 @@ async function captureWorklogFile(cwd: string, path: string): Promise<{
   if (rel.startsWith('..') || isAbsolute(rel) || await realpath(target) !== target) {
     throw new Error('Worklog file reference escapes Workspace or traverses a symlink')
   }
-  const info = await stat(target)
+  const info = await lstat(target)
   if (!info.isFile() || info.size > MAX_WORKLOG_FILE_BYTES) {
     throw new Error('Worklog file must be a regular file of at most 8 MiB')
   }
-  const bytes = await readFile(target)
-  if (bytes.length > MAX_WORKLOG_FILE_BYTES) throw new Error('Worklog file exceeds 8 MiB')
+  // Read through one no-follow handle that must still be the validated inode, so a symlink or
+  // file swapped in after the realpath check cannot redirect the snapshot.
+  let bytes: Buffer
+  try {
+    bytes = await readRegularFileNoFollow(target, { maxBytes: MAX_WORKLOG_FILE_BYTES,
+      expected: { dev: info.dev, ino: info.ino } })
+  } catch (error) {
+    throw new Error('Worklog file changed while it was captured or is not a regular file of at most 8 MiB',
+      { cause: error })
+  }
   return { path, sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, content: bytes }
 }
 

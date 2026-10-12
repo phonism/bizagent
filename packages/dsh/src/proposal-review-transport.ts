@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
 import { parseHomeAddress, type MemoryProposal } from './domain.js'
+import { guardLocalRoute } from './route-guard.js'
 import type { BizAgentService } from './service.js'
 import { BizAgentUiFacade } from './ui-host.js'
 import { BIZAGENT_UI_API } from './ui-contract.js'
@@ -74,11 +75,12 @@ export function createProposalReviewHttpHandler(service: BizAgentService, option
   }
 }
 
+/** Mount on the local DSH web server behind the loopback Host / same-origin route guard. */
 export function registerProposalReviewRoute(webServer: { register: (route: { kind: 'exact'; path: string;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }) => () => void },
 service: BizAgentService, options: ProposalReviewRouteOptions): () => void {
   return webServer.register({ kind: 'exact', path: BIZAGENT_PROPOSAL_REVIEW_API,
-    handler: createProposalReviewHttpHandler(service, options) })
+    handler: guardLocalRoute(createProposalReviewHttpHandler(service, options)) })
 }
 
 class RequestError extends Error {}

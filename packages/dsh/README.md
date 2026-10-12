@@ -73,7 +73,8 @@ Home 可由 urgent 信立即、normal 信按本 Home `inbox.json` 作息启动�
 独占认领，再以正式完成工具交回
 唯一结果，请求方可在结果预留前取消。请求与结果通知仍由 Inbox 传递，Work 状态由独立账本保存。
 执行方也可随唯一结果冻结 `artifacts/` 文件版本；请求方可按范围回读。
-配置了执行方 Workspace 映射时，派发会尝试启动独立 DSH worker Session；启动失败保留责任，可重试。
+配置了执行方 Workspace 映射、且双方 Home 的 owner 相同时，派发会尝试启动独立 DSH worker Session；
+启动失败保留责任，可重试。owner 不同时只创建 Work，由执行方自己的 Session 认领。
 Project 现在单独保存目标、完成标准、关联 Work、版本化结果声明、Agent 返工与真人接受记录；
 提交时可冻结 `artifacts/` 下的文件版本，之后按范围回读，验收与恢复包会核验快照。
 基本流程是：创建 Project → 邀请 Seat → 派正式 Work → 执行方完成 Work → lead 提交结果声明 →

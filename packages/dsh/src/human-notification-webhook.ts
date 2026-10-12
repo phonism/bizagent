@@ -46,6 +46,8 @@ export class HumanNotificationWebhook implements HumanNotificationProvider {
         method: 'POST',
         headers: { authorization, 'content-type': 'application/json' },
         body: JSON.stringify({ schemaVersion: 1, ...request }),
+        // Never forward the Authorization header to a redirect target.
+        redirect: 'error',
         signal: AbortSignal.timeout(this.timeoutMs),
       })
     } catch {

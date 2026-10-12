@@ -38,10 +38,14 @@ Project 修订和 claim ID：
 curl -H "Authorization: Bearer <token>" \
   'http://127.0.0.1:<port>/api/bizagent/project-review?inbox=1'
 curl -X POST -H "Authorization: Bearer <token>" \
+  -H 'Origin: http://127.0.0.1:<port>' \
   -H 'Content-Type: application/json' \
   -d '{"projectId":"<id>","claimId":"<claim>","expectedRevision":2,"decision":"accept","reason":"结果符合完成标准"}' \
   'http://127.0.0.1:<port>/api/bizagent/project-review'
 ```
+
+插件注册的所有路由都要求 `Host` 是本机回环地址、拒绝 `Sec-Fetch-Site: cross-site`，写请求还必须带与
+`Host` 相同的 `Origin`（浏览器会自动带上；命令行请求需像上面一样手动加）。
 
 浏览器工作台会在本机审核入口启用时显示令牌输入框。验证成功后，令牌仅保存在当前页面内存，
 发往真人 Inbox、Project 最终验收与两类知识提案路由；刷新页面后需重新输入。令牌不会进入 URL、

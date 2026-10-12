@@ -118,7 +118,10 @@ POST /api/bizagent/v1/proposals/decision
 安全与运行约束：
 
 - 所有响应 `Cache-Control: no-store`；
+- UI host 只在 DSH Web 绑定 `127.0.0.1` 时注册路由；
+- 每个请求的 `Host` 必须是本机回环地址（防 DNS rebinding），并拒绝 `Sec-Fetch-Site: cross-site`；
 - mutation 要求浏览器 `Origin` 与当前 `Host` 相同；
+- 错误响应只返回固定错误码和通用说明，不回显异常原文或本机路径；
 - JSON request body 上限为 64 KiB；
 - Zod 校验组织标识、成员/角色/能力、Home address、proposal id 与 decision；
 - 可选裁决路由由 `registerProposalReviewRoute` 挂载；宿主提供 `authenticateHuman`、`authorizeMutation`

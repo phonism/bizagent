@@ -282,7 +282,8 @@ test('Agent directory UI route uses the server-side Session and rechecks selecte
       if (String(id) !== 'directory-session') throw new Error('missing Session')
       return { session: { id, cwd: root }, events: sessionEvents }
     } },
-    webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
+    webServer: { host: '127.0.0.1',
+      register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     effect() {},
   })
   const get = async (path) => {
@@ -290,8 +291,8 @@ test('Agent directory UI route uses the server-side Session and rechecks selecte
       setHeader(key, value) { this.headers[key] = value },
       end(body) { this.body = body },
     }
-    await routes.get(new URL(path, 'http://dsh.local').pathname).handler({
-      method: 'GET', url: path, headers: { host: 'dsh.local' },
+    await routes.get(new URL(path, 'http://127.0.0.1:4100').pathname).handler({
+      method: 'GET', url: path, headers: { host: '127.0.0.1:4100' },
     }, response)
     return { status: response.statusCode, body: JSON.parse(response.body) }
   }
@@ -312,7 +313,11 @@ test('Agent directory UI route uses the server-side Session and rechecks selecte
   assert.equal(stale.body.frames[0].refreshRequired, true)
   const privateTarget = await get('/api/bizagent/v1/agents/resolve?sessionId=directory-session&target=personal:bob')
   assert.equal(privateTarget.status, 409)
-  assert.match(privateTarget.body.error.message, /not found or inaccessible/)
+  // The route returns a stable code; the service keeps the specific reason server-side.
+  assert.equal(privateTarget.body.error.code, 'operation-rejected')
+  assert.doesNotMatch(privateTarget.body.error.message, /personal:bob|not found or inaccessible/)
+  await assert.rejects(() => service.resolveHomeForSession('directory-session', root, 'personal:bob'),
+    /not found or inaccessible/)
   const unknown = await get('/api/bizagent/v1/agents?sessionId=unknown')
   assert.equal(unknown.status, 400)
   assert.equal((await get('/api/bizagent/v1/frames?sessionId=unknown')).status, 400)
@@ -326,6 +331,7 @@ test('UI host remains a separate optional Cordis adapter', async (t) => {
   const ctx = {
     bizagent: service,
     webServer: {
+      host: '127.0.0.1',
       register(route) {
         routes.set(route.path, route)
         return () => routes.delete(route.path)
@@ -379,12 +385,13 @@ test('Project UI routes retain Session Home visibility', async t => {
   })).project
   const routes = new Map()
   applyUiHost({ bizagent: service, sessionQuery: runtime.sessionQuery,
-    webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
+    webServer: { host: '127.0.0.1',
+      register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     effect() {} })
   const get = async path => {
     const response = { statusCode: 0, body: '', setHeader() {}, end(body) { this.body = body } }
-    await routes.get(new URL(path, 'http://dsh.local').pathname).handler({
-      method: 'GET', url: path, headers: { host: 'dsh.local' },
+    await routes.get(new URL(path, 'http://127.0.0.1:4100').pathname).handler({
+      method: 'GET', url: path, headers: { host: '127.0.0.1:4100' },
     }, response)
     return { status: response.statusCode, body: JSON.parse(response.body) }
   }
@@ -399,7 +406,10 @@ test('Project UI routes retain Session Home visibility', async t => {
   assert.deepEqual(other.body.projects, [])
   const hidden = await get(`/api/bizagent/v1/projects/detail?sessionId=ui-project-bob&projectId=${project.id}`)
   assert.notEqual(hidden.status, 200)
-  assert.match(hidden.body.error.message, /not visible/)
+  assert.equal(hidden.body.error.code, 'operation-rejected')
+  assert.doesNotMatch(hidden.body.error.message, /not visible|Evidence review/)
+  await assert.rejects(() => service.readProjectForSession('ui-project-bob', join(root, 'bob'), project.id),
+    /not visible/)
   assert.notEqual((await get('/api/bizagent/v1/projects?sessionId=unknown')).status, 200)
   const asset = await store.createAsset({ id: 'ui-use-asset', ownerAddress: 'personal:alice',
     kind: 'method', description: 'Use in later Work', body: 'Compare like for like.', status: 'active',
@@ -426,7 +436,8 @@ test('learning schedule UI mutation checks origin and forwards revision to the h
     },
   }
   applyUiHost({ bizagent: service, bizagentLearningScheduler: scheduler,
-    webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
+    webServer: { host: '127.0.0.1',
+      register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     effect() {},
   })
   const handler = routes.get('/api/bizagent/v1/learning/schedule/configure').handler
@@ -436,7 +447,7 @@ test('learning schedule UI mutation checks origin and forwards revision to the h
       end(body) { this.body = body },
     }
     const request = { method: 'POST', url: '/api/bizagent/v1/learning/schedule/configure',
-      headers: { host: 'dsh.local', origin, 'content-type': 'application/json' },
+      headers: { host: '127.0.0.1:4100', origin, 'content-type': 'application/json' },
       async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({
         home: 'personal:alice', expectedRevision: 4, enabled: false,
         cron: '0 3 * * *', dailyRuns: 1,
@@ -447,10 +458,123 @@ test('learning schedule UI mutation checks origin and forwards revision to the h
   }
   assert.equal((await send('https://attacker.local')).statusCode, 403)
   assert.equal(calls.length, 0)
-  const allowed = await send('http://dsh.local')
+  const allowed = await send('http://127.0.0.1:4100')
   assert.equal(allowed.statusCode, 200)
   assert.deepEqual(calls[0], { home: 'personal:alice', input: {
     home: 'personal:alice', expectedRevision: 4, enabled: false,
     cron: '0 3 * * *', dailyRuns: 1,
   } })
+})
+
+function routeHarness(service, extra = {}) {
+  const routes = new Map()
+  applyUiHost({ bizagent: service, ...extra,
+    webServer: { host: '127.0.0.1',
+      register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
+    effect() {} })
+  return async (path, { method = 'GET', headers = {}, body } = {}) => {
+    const response = { statusCode: 0, headers: {}, body: '',
+      setHeader(key, value) { this.headers[key] = value },
+      end(value) { this.body = value },
+    }
+    const request = { method, url: path, headers,
+      async *[Symbol.asyncIterator]() { if (body !== undefined) yield Buffer.from(JSON.stringify(body)) } }
+    await routes.get(new URL(path, 'http://127.0.0.1').pathname).handler(request, response)
+    return { status: response.statusCode, body: JSON.parse(response.body) }
+  }
+}
+
+const ORGANIZATION_REQUEST = (root, id = 'acme') => ({
+  workspacePath: `${root}/workspace`, id, name: 'Acme Agents', mission: 'ship useful software.',
+  members: [{ id: 'builder', displayName: 'Builder', roleId: 'engineering', roleName: 'Engineering',
+    responsibility: 'Implement and test the product.' }],
+  capabilities: [],
+})
+
+test('UI routes reject DNS-rebinding hosts, cross-site fetches, and mutations without a same-origin Origin', async t => {
+  const { service, root } = await fixture(t)
+  const call = routeHarness(service)
+  const loopback = '127.0.0.1:4100'
+  const rebinding = 'rebind.attacker.example:4100'
+  const json = { 'content-type': 'application/json' }
+
+  for (const path of ['/api/bizagent/v1/overview', '/api/bizagent/v1/home?address=personal%3Aalice']) {
+    const read = await call(path, { headers: { host: rebinding } })
+    assert.equal(read.status, 403)
+    assert.equal(read.body.error.code, 'untrusted-host')
+    assert.equal(read.body.homes, undefined)
+    assert.equal(read.body.identity, undefined)
+  }
+  const rebindWrite = await call('/api/bizagent/v1/organization', { method: 'POST',
+    headers: { ...json, host: rebinding, origin: `http://${rebinding}` }, body: ORGANIZATION_REQUEST(root) })
+  assert.equal(rebindWrite.status, 403)
+  assert.equal(rebindWrite.body.error.code, 'untrusted-host')
+  assert.equal(service.store.getOrganization(), undefined)
+  for (const host of ['localhost.attacker.example:4100', '127.0.0.1.attacker.example', 'evil@127.0.0.1:4100', '']) {
+    assert.equal((await call('/api/bizagent/v1/overview', { headers: { host } })).status, 403, host)
+  }
+  assert.equal((await call('/api/bizagent/v1/overview', { headers: {} })).status, 403)
+
+  const crossSite = await call('/api/bizagent/v1/overview',
+    { headers: { host: loopback, 'sec-fetch-site': 'cross-site' } })
+  assert.equal(crossSite.status, 403)
+  assert.equal(crossSite.body.error.code, 'cross-site-request')
+  const crossOriginRead = await call('/api/bizagent/v1/overview',
+    { headers: { host: loopback, origin: 'http://127.0.0.1:3000' } })
+  assert.equal(crossOriginRead.status, 403)
+
+  const noOrigin = await call('/api/bizagent/v1/homes', { method: 'POST',
+    headers: { ...json, host: loopback }, body: { address: 'role:intruder' } })
+  assert.equal(noOrigin.status, 403)
+  assert.equal(noOrigin.body.error.code, 'origin-rejected')
+  for (const origin of ['http://127.0.0.1:3000', 'null', `http://${rebinding}`]) {
+    const rejected = await call('/api/bizagent/v1/homes', { method: 'POST',
+      headers: { ...json, host: loopback, origin }, body: { address: 'role:intruder' } })
+    assert.equal(rejected.status, 403, origin)
+  }
+  assert.equal(service.store.hasHome('role:intruder'), false)
+
+  for (const host of [loopback, 'localhost:4100', '[::1]:4100', '127.0.0.1']) {
+    const read = await call('/api/bizagent/v1/overview',
+      { headers: { host, 'sec-fetch-site': 'same-origin' } })
+    assert.equal(read.status, 200, host)
+    assert.equal(read.body.totals.homes, 2)
+  }
+  const created = await call('/api/bizagent/v1/homes', { method: 'POST',
+    headers: { ...json, host: loopback, origin: `http://${loopback}`, 'sec-fetch-site': 'same-origin' },
+    body: { address: 'role:reviewer' } })
+  assert.equal(created.status, 200)
+  assert.equal(service.store.hasHome('role:reviewer'), true)
+})
+
+test('UI route errors return stable codes without raw exception text or absolute paths', async t => {
+  const { service, root } = await fixture(t)
+  const call = routeHarness(service)
+  const headers = { 'content-type': 'application/json', host: '127.0.0.1:4100', origin: 'http://127.0.0.1:4100' }
+  const first = await call('/api/bizagent/v1/organization', { method: 'POST', headers, body: ORGANIZATION_REQUEST(root) })
+  assert.equal(first.status, 200)
+  const activeRoot = service.store.root
+  await assert.rejects(() => service.createOrganizationInWorkspace(ORGANIZATION_REQUEST(root, 'other')),
+    new RegExp(`organization already exists at ${activeRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+  const conflict = await call('/api/bizagent/v1/organization', { method: 'POST', headers,
+    body: ORGANIZATION_REQUEST(root, 'other') })
+  assert.equal(conflict.status, 409)
+  assert.equal(conflict.body.error.code, 'operation-rejected')
+  assert.equal(JSON.stringify(conflict.body).includes(root), false)
+  const missing = await call('/api/bizagent/v1/home?address=personal%3Amissing', { headers })
+  assert.equal(missing.status, 409)
+  assert.doesNotMatch(missing.body.error.message, /personal:missing|not found/)
+  const invalid = await call('/api/bizagent/v1/homes', { method: 'POST', headers, body: { address: 1 } })
+  assert.equal(invalid.status, 400)
+  assert.equal(invalid.body.error.code, 'invalid-request')
+  assert.match(invalid.body.error.message, /address/)
+})
+
+test('UI host refuses to register routes unless DSH Web binds loopback', async t => {
+  const { service } = await fixture(t)
+  const routes = new Map()
+  assert.throws(() => applyUiHost({ bizagent: service,
+    webServer: { host: '0.0.0.0', register(route) { routes.set(route.path, route); return () => {} } },
+    effect() {} }), /require DSH Web to bind 127\.0\.0\.1/)
+  assert.equal(routes.size, 0)
 })

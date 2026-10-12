@@ -379,7 +379,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       headers: { Authorization: `Bearer ${humanToken}` },
     })).status, 200)
     const principal = await json(base, '/api/bizagent/agent-session', {
-      method: 'POST', headers: { Authorization: `Bearer ${humanToken}`,
+      method: 'POST', headers: { Authorization: `Bearer ${humanToken}`, Origin: base,
         'Content-Type': 'application/json' },
       body: JSON.stringify({ homeAddress: 'personal:default' }),
     })
@@ -389,7 +389,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       safeHomeId('personal:default')))
     for (const address of ['line:smoke', 'business:smoke', 'role:smoke', 'capability:smoke']) {
       const homePrincipal = await json(base, '/api/bizagent/agent-session', {
-        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`,
+        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`, Origin: base,
           'Content-Type': 'application/json' },
         body: JSON.stringify({ homeAddress: address }),
       })
@@ -413,7 +413,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
         return projects.projects.some(project => project.id === humanProjectId)
       }, 'Project created by Principal')
       const main = await json(base, '/api/bizagent/agent-session', {
-        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`,
+        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`, Origin: base,
           'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId: humanProjectId }),
       })
@@ -465,14 +465,14 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       headers: { Authorization: `Bearer ${humanToken}` },
     })).userId, 'smoke-owner')
     const principal = await json(base, '/api/bizagent/agent-session', {
-      method: 'POST', headers: { Authorization: `Bearer ${humanToken}`,
+      method: 'POST', headers: { Authorization: `Bearer ${humanToken}`, Origin: base,
         'Content-Type': 'application/json' },
       body: JSON.stringify({ homeAddress: 'personal:default' }),
     })
     assert.equal(principal.sessionId, principalSessionId('personal:default'))
     for (const address of ['line:smoke', 'business:smoke', 'role:smoke', 'capability:smoke']) {
       const homePrincipal = await json(base, '/api/bizagent/agent-session', {
-        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`,
+        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`, Origin: base,
           'Content-Type': 'application/json' },
         body: JSON.stringify({ homeAddress: address }),
       })
@@ -480,7 +480,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
     }
     if (modelPort !== undefined) {
       const main = await json(base, '/api/bizagent/agent-session', {
-        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`,
+        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`, Origin: base,
           'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId: humanProjectId }),
       })
@@ -535,7 +535,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
         })
       assert.equal(review.canReview, true)
       const decision = await json(base, '/api/bizagent/project-review', {
-        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`,
+        method: 'POST', headers: { Authorization: `Bearer ${humanToken}`, Origin: base,
           'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId: humanProjectId, claimId: review.claimId,
           expectedRevision: review.revision, decision: 'accept',
@@ -557,7 +557,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       assert.ok(sharedBeforeReview.proposals.some(item => item.proposal.id === commonKnowledgeProposalId))
       for (const proposalId of [lineKnowledgeProposalId, commonKnowledgeProposalId]) {
         const approved = await json(base, '/api/bizagent/shared-knowledge/decision', {
-          method: 'POST', headers: { Authorization: `Bearer ${humanToken}`,
+          method: 'POST', headers: { Authorization: `Bearer ${humanToken}`, Origin: base,
             'Content-Type': 'application/json' },
           body: JSON.stringify({ proposalId, action: 'accept', decision: 'The shared rule is verified.' }),
         })
@@ -590,7 +590,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       headers: { Authorization: `Bearer ${humanToken}` },
     })).status, 200)
     const principal = await json(base, '/api/bizagent/agent-session', {
-      method: 'POST', headers: { Authorization: `Bearer ${humanToken}`,
+      method: 'POST', headers: { Authorization: `Bearer ${humanToken}`, Origin: base,
         'Content-Type': 'application/json' },
       body: JSON.stringify({ homeAddress: 'personal:default' }),
     })
