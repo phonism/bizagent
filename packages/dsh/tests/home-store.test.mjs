@@ -71,6 +71,34 @@ test('HomeStore rejects duplicate addresses and cross-owner files', async (t) =>
   }), /Agent Home not found/)
 })
 
+test('HomeStore rejects stale concurrent edits and same-id content collisions', async (t) => {
+  const root = await makeTempDir('bizagent-asset-revision-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'personal:alice' })
+  const input = {
+    id: 'mem-review', ownerAddress: 'personal:alice', kind: 'memory',
+    description: 'Review backups', body: 'Verify a backup by restoring it.',
+    sourceRefs: [{ type: 'session-events', sessionId: 's', fromSeq: 0, toSeq: 1 }],
+  }
+  const asset = await store.createAsset(input)
+  assert.deepEqual(await store.createAsset(input), asset)
+  await assert.rejects(() => store.createAsset({ ...input, body: 'A different observation.' }), /collision/)
+  const results = await Promise.allSettled([
+    store.updateAsset(input.ownerAddress, input.id, { expectedRevision: 1, body: 'First reviewed update.' }),
+    store.updateAsset(input.ownerAddress, input.id, { expectedRevision: 1, body: 'Stale competing update.' }),
+  ])
+  assert.equal(results[0].status, 'fulfilled')
+  assert.equal(results[1].status, 'rejected')
+  assert.match(results[1].reason.message, /revision conflict/)
+  const reloaded = new HomeStore(root)
+  await reloaded.initialize()
+  assert.equal(reloaded.readAsset(input.ownerAddress, input.id).body, 'First reviewed update.')
+  assert.equal(reloaded.readAsset(input.ownerAddress, input.id).revision, 2)
+  assert.deepEqual((await reloaded.doctor()).issues, [])
+})
+
 test('HomeStore creates and reloads a complete organization graph', async (t) => {
   const root = await makeTempDir('bizagent-organization-')
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -105,9 +133,12 @@ test('HomeStore creates and reloads a complete organization graph', async (t) =>
   })
 
   assert.equal(created.businessHome, 'business:northstar-lab')
+  assert.equal(created.lineHome, 'line:northstar-lab')
   assert.equal(created.members.length, 2)
-  assert.equal(created.links.length, 7)
-  assert.equal(store.listHomes().length, 6)
+  assert.equal(created.links.length, 11)
+  assert.equal(store.listHomes().length, 7)
+  assert.equal(store.getHome('line:northstar-lab').owner, 'alice')
+  assert.equal(store.getHome('personal:alice').owner, 'alice')
   assert.match(store.getIdentity('personal:alice'), /Product Lead/)
 
   const reloaded = new HomeStore(root)

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { HomeStore } from './home-store.js'
+import { exportHomeArchive, importHomeArchive, verifyHomeArchive } from './home-archive.js'
 
 const args = process.argv.slice(2)
 
@@ -20,6 +21,26 @@ async function main(argv: string[]): Promise<void> {
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
     printHelp()
     return
+  }
+  if (command === 'archive') {
+    const [action, path] = rest
+    if (!path || rest.length !== 2) throw new Error('archive requires one source or destination path')
+    if (action === 'export') {
+      const manifest = await exportHomeArchive(parsed.root, path)
+      print({ archive: resolve(path), rootDigest: manifest.rootDigest, files: manifest.files.length })
+      return
+    }
+    if (action === 'verify') {
+      const manifest = await verifyHomeArchive(path)
+      print({ verified: true, archive: resolve(path), rootDigest: manifest.rootDigest, files: manifest.files.length })
+      return
+    }
+    if (action === 'import') {
+      const manifest = await importHomeArchive(path, parsed.root)
+      print({ imported: true, root: parsed.root, rootDigest: manifest.rootDigest, files: manifest.files.length })
+      return
+    }
+    throw new Error(`unknown archive action: ${action ?? '(missing)'}`)
   }
   const store = new HomeStore(parsed.root)
   await store.initialize()
@@ -118,4 +139,7 @@ function printHelp(): void {
   process.stdout.write(`  bizagent [--root PATH] home list\n`)
   process.stdout.write(`  bizagent [--root PATH] doctor\n`)
   process.stdout.write(`  bizagent [--root PATH] reindex\n`)
+  process.stdout.write(`  bizagent [--root PATH] archive export DIRECTORY\n`)
+  process.stdout.write(`  bizagent archive verify DIRECTORY\n`)
+  process.stdout.write(`  bizagent --root NEW_EMPTY_HOME_ROOT archive import DIRECTORY\n`)
 }

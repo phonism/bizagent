@@ -9,7 +9,6 @@ import {
 import {
   IconCheckOutline16,
   IconCloseOutline16,
-  IconDataOutline16,
   IconPlusOutline16,
   IconRefreshOutline16,
   IconSearchOutline16,
@@ -19,20 +18,26 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import type { WorkspaceView } from '@deepseek-ai/dsh-client-runtime/client'
 import type {
   LearningKind,
   UiAsset,
   UiCreateOrganizationRequest,
   UiHomeDetail,
   UiHomeSummary,
+  UiLearningSchedule,
+  UiMemoryUseOutcomes,
   UiOverview,
 } from '../ui-contract.js'
-import type { BizAgentUiPort } from './api.js'
+import type { BizAgentUiPort, UiSharedKnowledgeReviews } from './api.js'
 import type { BizAgentUiController } from './controller.js'
+import { ProjectsDashboard } from './projects.js'
+import { HumanInboxDashboard } from './human-inbox.js'
 
 export interface BizAgentUiFace {
   controller: BizAgentUiController
   api: BizAgentUiPort
+  openAgentSession: (input: { homeAddress: string } | { projectId: string }) => Promise<void>
 }
 
 type LauncherProps = PropsRuntime<'sidebar.footer.action'>
@@ -45,11 +50,30 @@ type DashboardProps = PropsRuntime<'shell.overlay'>
 
 const KINDS: LearningKind[] = ['memory', 'insight', 'knowledge', 'method']
 const STATUSES = ['active', 'candidate', 'superseded', 'retired'] as const
-const HOME_TYPES = ['personal', 'business', 'role', 'capability'] as const
-type DashboardView = 'organization' | 'learning'
+const HOME_TYPES = ['personal', 'line', 'business', 'role', 'capability'] as const
+type DashboardView = 'organization' | 'learning' | 'projects' | 'humanInbox'
 
-export function BizAgentLauncher({ wide, controller, t }: LauncherProps) {
-  const open = useSyncExternalStore(controller.subscribe, controller.getSnapshot).open
+function BizAgentMark() {
+  return (
+    <svg className="ba-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+      <path className="ba-mark-base" d="M6 41 32 27 58 41 32 56Z" />
+      <path className="ba-mark-middle" d="M6 29 32 15 58 29 32 44Z" />
+      <path className="ba-mark-top" d="M6 17 32 3 58 17 32 32Z" />
+    </svg>
+  )
+}
+
+export function BizAgentLauncher({ wide, controller, api, t }: LauncherProps) {
+  const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
+  const [overview, setOverview] = useState<UiOverview>()
+  const currentOrganization = overview?.organization
+
+  useEffect(() => {
+    const abort = new AbortController()
+    void api.overview(abort.signal).then(setOverview).catch(() => undefined)
+    return () => { abort.abort() }
+  }, [api, snapshot.revision])
+
   return (
     <Tooltip label={t('launcher.aria')} delayMs={500} disabled={wide}>
       <button
@@ -57,18 +81,30 @@ export function BizAgentLauncher({ wide, controller, t }: LauncherProps) {
         className="ba-launcher"
         data-rail={wide ? 'false' : 'true'}
         aria-label={t('launcher.aria')}
-        aria-pressed={open}
+        aria-pressed={snapshot.open}
         onClick={() => { controller.toggle() }}
       >
-        <IconDataOutline16 size={wide ? 16 : 18} />
-        {wide ? <span>{t('launcher.label')}</span> : null}
+        <BizAgentMark />
+        {wide ? (
+          <span className="ba-launcher-copy">
+            <span>{t('launcher.label')}</span>
+            <small>{currentOrganization?.name ?? t('launcher.hint')}</small>
+          </span>
+        ) : null}
       </button>
     </Tooltip>
   )
 }
 
-export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
+export function BizAgentDashboard({ controller, api, openAgentSession, t, useSessions, useWorkspaces }: DashboardProps) {
   const open = useSyncExternalStore(controller.subscribe, controller.getSnapshot).open
+  const currentSessionId = useSessions(state => state.current)
+  const currentCwd = useSessions(state => state.current === undefined ? undefined : state.byId[state.current]?.cwd)
+  const workspaces = useWorkspaces(state => state.items)
+  const currentWorkspace = useMemo(
+    () => currentDshWorkspace(workspaces, currentSessionId, currentCwd),
+    [currentCwd, currentSessionId, workspaces],
+  )
   const dialogRef = useRef<HTMLElement>(null)
   const [overview, setOverview] = useState<UiOverview>()
   const [detail, setDetail] = useState<UiHomeDetail>()
@@ -79,6 +115,11 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string>()
   const [createOpen, setCreateOpen] = useState(false)
+  const [localHumanStatus, setLocalHumanStatus] = useState<'hidden' | 'needed' | 'ready'>('hidden')
+  const [localHumanTokenInput, setLocalHumanTokenInput] = useState('')
+  const [localHumanError, setLocalHumanError] = useState(false)
+  const [localHumanBusy, setLocalHumanBusy] = useState(false)
+  const [localHumanEpoch, setLocalHumanEpoch] = useState(0)
   const [view, setView] = useState<DashboardView>('organization')
 
   const load = async (preferred?: string, signal?: AbortSignal): Promise<void> => {
@@ -111,22 +152,72 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
   }, [open])
 
   useEffect(() => {
+    if (!open || api.localHumanStatus === undefined) return
+    const abort = new AbortController()
+    void api.localHumanStatus(abort.signal).then(status => {
+      if (!abort.signal.aborted) setLocalHumanStatus(status.available
+        ? status.authenticated ? 'ready' : 'needed' : 'hidden')
+    }).catch(() => { if (!abort.signal.aborted) setLocalHumanStatus('hidden') })
+    return () => { abort.abort() }
+  }, [api, open])
+
+  const submitLocalHumanToken = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    if (api.setLocalHumanToken === undefined || localHumanBusy) return
+    setLocalHumanBusy(true)
+    setLocalHumanError(false)
+    try {
+      const accepted = await api.setLocalHumanToken(localHumanTokenInput.trim())
+      if (!accepted) { setLocalHumanError(true); return }
+      setLocalHumanTokenInput('')
+      setLocalHumanStatus('ready')
+      setLocalHumanEpoch(value => value + 1)
+    } catch { setLocalHumanError(true) }
+    finally { setLocalHumanBusy(false) }
+  }
+
+  const clearLocalHumanToken = async (): Promise<void> => {
+    await api.setLocalHumanToken?.(undefined)
+    setLocalHumanStatus('needed')
+    setLocalHumanEpoch(value => value + 1)
+  }
+
+  useEffect(() => {
     if (!open) return
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     dialogRef.current?.focus()
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
-        if (createOpen) setCreateOpen(false)
+        if (dialogRef.current?.querySelector('.ba-modal-layer')) setCreateOpen(false)
         else controller.close()
+      }
+      if (event.key === 'Tab') {
+        const dialog = dialogRef.current
+        if (dialog === null) return
+        const scope = dialog.querySelector('.ba-modal-layer') ?? dialog
+        const controls = [...scope.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], [tabindex="0"]')]
+          .filter(element => !element.hasAttribute('disabled') && element.getClientRects().length > 0)
+        const first = controls[0]
+        const last = controls.at(-1)
+        if (first === undefined || last === undefined) { event.preventDefault(); return }
+        if (event.shiftKey && (document.activeElement === first || !scope.contains(document.activeElement) || document.activeElement === dialog)) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && (document.activeElement === last || !scope.contains(document.activeElement))) {
+          event.preventDefault()
+          first.focus()
+        }
       }
     }
     document.addEventListener('keydown', onKey)
     return () => {
       document.removeEventListener('keydown', onKey)
+      previousFocus?.focus()
       document.body.style.overflow = previousOverflow
     }
-  }, [controller, createOpen, open])
+  }, [controller, open])
 
   if (!open) return null
 
@@ -196,23 +287,37 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
         tabIndex={-1}
       >
         <header className="ba-topbar">
-          <span className="ba-brand-sigil" aria-hidden="true" />
+          <span className="ba-brand-sigil"><BizAgentMark /></span>
           <div className="ba-title-wrap">
-            <p className="ba-eyebrow">{t('dashboard.eyebrow')}</p>
             <h2 className="ba-title" id="ba-dashboard-title">{t('dashboard.title')}</h2>
             <p className="ba-subtitle">{t('dashboard.subtitle')}</p>
           </div>
-          {overview?.organization !== undefined ? (
-            <nav className="ba-view-tabs" aria-label={t('nav.aria')}>
+          <nav className="ba-view-tabs" aria-label={t('nav.aria')}>
+            {overview?.organization !== undefined ? (
+              <>
               <button type="button" data-active={view === 'organization' ? 'true' : 'false'} onClick={() => { setView('organization') }}>
                 {t('nav.organization')}
               </button>
               <button type="button" data-active={view === 'learning' ? 'true' : 'false'} onClick={() => { setView('learning') }}>
                 {t('nav.learning')}
               </button>
-            </nav>
-          ) : null}
+              <button type="button" data-active={view === 'projects' ? 'true' : 'false'} onClick={() => { setView('projects') }}>
+                {t('nav.projects')}
+              </button>
+              </>
+            ) : null}
+            <button type="button" data-active={view === 'humanInbox' ? 'true' : 'false'} onClick={() => { setView('humanInbox') }}>
+              {t('nav.humanInbox')}
+            </button>
+          </nav>
           <div className="ba-top-actions">
+            {overview !== undefined && currentWorkspace !== undefined ? (
+              <span className="ba-current-location">
+                <strong>{currentWorkspace.title}</strong>
+                <span>/</span>
+                <code>{samePath(overview.organizationLocation?.workspacePath, currentWorkspace.path) ? `bizagent/${overview.organization?.id ?? ''}` : t('workspace.noOrganization')}</code>
+              </span>
+            ) : null}
             {overview !== undefined ? (
               <span className="ba-health" data-ok={overview.health.ok ? 'true' : 'false'}>
                 <span className="ba-health-dot" aria-hidden="true" />
@@ -243,13 +348,46 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
           </div>
         </header>
 
+        {localHumanStatus !== 'hidden' ? (
+          <div className="ba-local-human-auth">
+            {localHumanStatus === 'ready' ? (
+              <>
+                <span>{t('localHuman.ready')}</span>
+                <button type="button" onClick={() => { void clearLocalHumanToken() }}>{t('localHuman.clear')}</button>
+              </>
+            ) : (
+              <form onSubmit={(event) => { void submitLocalHumanToken(event) }}>
+                <label htmlFor="ba-local-human-token">{t('localHuman.label')}</label>
+                <input id="ba-local-human-token" type="password" autoComplete="off"
+                  value={localHumanTokenInput} onChange={event => { setLocalHumanTokenInput(event.target.value) }} />
+                <button type="submit" disabled={localHumanBusy || localHumanTokenInput.trim().length === 0}>
+                  {t('localHuman.connect')}
+                </button>
+                {localHumanError ? <span role="alert">{t('localHuman.invalid')}</span> : null}
+              </form>
+            )}
+          </div>
+        ) : null}
+
         {loading ? <LoadingState label={t('dashboard.loading')} /> : error !== undefined && overview === undefined ? (
           <FailureState message={t('dashboard.failed', { message: error })} retry={() => { void refresh() }} retryLabel={t('dashboard.retry')} />
+        ) : view === 'humanInbox' ? (
+          <HumanInboxDashboard key={localHumanEpoch} api={api} t={t} />
+        ) : view === 'projects' && overview !== undefined ? (
+          <ProjectsDashboard key={`${currentSessionId ?? 'none'}:${localHumanEpoch}`} api={api}
+            sessionId={currentSessionId} onOpenMain={projectId => openAgentSession({ projectId })} t={t} />
         ) : overview !== undefined && overview.organization === undefined ? (
-          <OrganizationSetup api={api} onCreated={onOrganizationCreated} t={t} />
+          <OrganizationSetup
+            api={api}
+            workspaces={workspaces}
+            currentWorkspacePath={currentWorkspace?.path}
+            onCreated={onOrganizationCreated}
+            t={t}
+          />
         ) : view === 'organization' && overview?.organization !== undefined ? (
           <OrganizationOverview
             overview={overview}
+            currentWorkspacePath={currentWorkspace?.path}
             onOpenHome={(address) => {
               void selectHome(address).then(() => { setView('learning') })
             }}
@@ -271,14 +409,17 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
                 <EmptyState title={t('directory.empty')} hint="" />
               ) : (
                 <HomeWorkspace
+                  api={api}
                   detail={detail}
+                  sessionId={currentSessionId}
                   selectedAsset={selectedAsset}
                   onSelectAsset={(id) => { setSelectedAsset(current => current === id ? undefined : id) }}
+                  onOpenPrincipal={homeAddress => openAgentSession({ homeAddress })}
                   t={t}
                 />
               )}
             </main>
-            <ProposalInbox
+            <ProposalInbox key={localHumanEpoch}
               detail={detail}
               selected={selectedProposal}
               onSelect={setSelectedProposal}
@@ -305,8 +446,10 @@ export function BizAgentDashboard({ controller, api, t }: DashboardProps) {
 type MemberDraft = UiCreateOrganizationRequest['members'][number]
 type CapabilityDraft = UiCreateOrganizationRequest['capabilities'][number]
 
-function OrganizationSetup({ api, onCreated, t }: {
+function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t }: {
   api: BizAgentUiPort
+  workspaces: readonly WorkspaceView[]
+  currentWorkspacePath: string | undefined
   onCreated: (overview: UiOverview) => Promise<void>
   t: DashboardProps['t']
 }) {
@@ -318,6 +461,7 @@ function OrganizationSetup({ api, onCreated, t }: {
   const [members, setMembers] = useState<MemberDraft[]>(() => teamTemplate('product', t).members)
   const [capabilities, setCapabilities] = useState<CapabilityDraft[]>(() => teamTemplate('product', t).capabilities)
   const [template, setTemplate] = useState('product')
+  const [organizationWorkspace, setOrganizationWorkspace] = useState(currentWorkspacePath ?? workspaces[0]?.path ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
@@ -348,11 +492,12 @@ function OrganizationSetup({ api, onCreated, t }: {
   }
 
   const submit = async (): Promise<void> => {
-    if (!validBasics || !validMembers || !validCapabilities || busy) return
+    if (!validBasics || !validMembers || !validCapabilities || organizationWorkspace === '' || busy) return
     setBusy(true)
     setError(undefined)
     try {
-      await onCreated(await api.createOrganization({
+      const nextOverview = await api.createOrganization({
+        workspacePath: organizationWorkspace,
         id,
         name: name.trim(),
         mission: mission.trim(),
@@ -368,7 +513,8 @@ function OrganizationSetup({ api, onCreated, t }: {
           displayName: capability.displayName.trim(),
           responsibility: capability.responsibility.trim(),
         })),
-      }))
+      })
+      await onCreated(nextOverview)
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
@@ -383,7 +529,7 @@ function OrganizationSetup({ api, onCreated, t }: {
         <h3>{t('setup.title')}</h3>
         <p>{t('setup.subtitle')}</p>
         <ol className="ba-steps">
-          {[t('setup.step.identity'), t('setup.step.team'), t('setup.step.capabilities')].map((label, index) => (
+          {[t('setup.step.identity'), t('setup.step.team'), t('setup.step.capabilities'), t('setup.step.directory')].map((label, index) => (
             <li data-active={step === index ? 'true' : 'false'} data-done={step > index ? 'true' : 'false'} key={label}>
               <span>{step > index ? '✓' : index + 1}</span>{label}
             </li>
@@ -394,11 +540,12 @@ function OrganizationSetup({ api, onCreated, t }: {
         event.preventDefault()
         if (step === 0 && validBasics) setStep(1)
         else if (step === 1 && validMembers) setStep(2)
-        else if (step === 2) void submit()
+        else if (step === 2 && validCapabilities) setStep(3)
+        else if (step === 3) void submit()
       }}>
         {step === 0 ? (
           <div className="ba-setup-stage">
-            <p className="ba-stage-number">01 / 03</p>
+            <p className="ba-stage-number">01 / 04</p>
             <h3>{t('setup.identity.title')}</h3>
             <p className="ba-stage-lead">{t('setup.identity.lead')}</p>
             <div className="ba-setup-grid">
@@ -425,7 +572,7 @@ function OrganizationSetup({ api, onCreated, t }: {
           </div>
         ) : step === 1 ? (
           <div className="ba-setup-stage">
-            <p className="ba-stage-number">02 / 03</p>
+            <p className="ba-stage-number">02 / 04</p>
             <h3>{t('setup.team.title')}</h3>
             <p className="ba-stage-lead">{t('setup.team.lead')}</p>
             <div className="ba-template-row">
@@ -450,9 +597,9 @@ function OrganizationSetup({ api, onCreated, t }: {
               <IconPlusOutline16 size={14} /> {t('setup.member.add')}
             </button>
           </div>
-        ) : (
+        ) : step === 2 ? (
           <div className="ba-setup-stage">
-            <p className="ba-stage-number">03 / 03</p>
+            <p className="ba-stage-number">03 / 04</p>
             <h3>{t('setup.capabilities.title')}</h3>
             <p className="ba-stage-lead">{t('setup.capabilities.lead')}</p>
             <div className="ba-capability-drafts">
@@ -475,15 +622,37 @@ function OrganizationSetup({ api, onCreated, t }: {
             </div>
             {error !== undefined ? <p className="ba-inline-error" role="alert">{t('setup.failed', { message: error })}</p> : null}
           </div>
+        ) : (
+          <div className="ba-setup-stage">
+            <p className="ba-stage-number">04 / 04</p>
+            <h3>{t('setup.directory.title')}</h3>
+            <p className="ba-stage-lead">{t('setup.directory.lead')}</p>
+            {workspaces.length === 0 ? (
+              <div className="ba-location-empty">{t('setup.directory.empty')}</div>
+            ) : (
+              <div className="ba-setup-location">
+                <label className="ba-form-field">
+                  <span className="ba-field-label">{t('workspace.name')}</span>
+                  <select className="ba-select" value={organizationWorkspace} onChange={(event) => { setOrganizationWorkspace(event.target.value) }}>
+                    {workspaces.map(workspace => <option value={workspace.path} key={workspace.workspaceId}>{workspace.title}</option>)}
+                  </select>
+                  <code>{organizationWorkspace}</code>
+                </label>
+                <OrganizationPathTree workspacePath={organizationWorkspace} organizationId={id} t={t} />
+              </div>
+            )}
+            <p className="ba-location-note">{t('setup.directory.note')}</p>
+            {error !== undefined ? <p className="ba-inline-error" role="alert">{t('setup.failed', { message: error })}</p> : null}
+          </div>
         )}
         <footer className="ba-setup-actions">
           {step > 0 ? <button type="button" className="ba-button" onClick={() => { setStep(current => current - 1) }}>{t('setup.back')}</button> : <span />}
-          {step < 2 ? (
-            <button type="submit" className="ba-button" data-variant="primary" disabled={step === 0 ? !validBasics : !validMembers}>
+          {step < 3 ? (
+            <button type="submit" className="ba-button" data-variant="primary" disabled={step === 0 ? !validBasics : step === 1 ? !validMembers : !validCapabilities}>
               {t('setup.continue')}
             </button>
           ) : (
-            <button type="submit" className="ba-button" data-variant="primary" disabled={!validCapabilities || busy}>
+            <button type="submit" className="ba-button" data-variant="primary" disabled={organizationWorkspace === '' || busy}>
               {busy ? t('setup.creating') : t('setup.create')}
             </button>
           )}
@@ -493,8 +662,9 @@ function OrganizationSetup({ api, onCreated, t }: {
   )
 }
 
-function OrganizationOverview({ overview, onOpenHome, onOpenLearning, t }: {
+function OrganizationOverview({ overview, currentWorkspacePath, onOpenHome, onOpenLearning, t }: {
   overview: UiOverview
+  currentWorkspacePath: string | undefined
   onOpenHome: (address: string) => void
   onOpenLearning: () => void
   t: DashboardProps['t']
@@ -502,8 +672,10 @@ function OrganizationOverview({ overview, onOpenHome, onOpenLearning, t }: {
   const organization = overview.organization
   if (organization === undefined) return null
   const homeByAddress = new Map(overview.homes.map(home => [home.address, home]))
+  const line = organization.lineHome === undefined ? undefined : homeByAddress.get(organization.lineHome)
   const business = homeByAddress.get(organization.businessHome)
   const assigned = new Set([
+    ...(organization.lineHome === undefined ? [] : [organization.lineHome]),
     organization.businessHome,
     ...organization.members.flatMap(member => [member.personalHome, member.roleHome]),
     ...organization.capabilityHomes,
@@ -513,7 +685,7 @@ function OrganizationOverview({ overview, onOpenHome, onOpenLearning, t }: {
   return (
     <main className="ba-org-shell">
       <header className="ba-org-hero">
-        <div>
+        <div className="ba-org-intro">
           <p className="ba-org-kicker">{t('organization.kicker')}</p>
           <h3>{organization.name}</h3>
           <p>{organization.mission}</p>
@@ -522,15 +694,28 @@ function OrganizationOverview({ overview, onOpenHome, onOpenLearning, t }: {
             <span><strong>{organization.capabilityHomes.length}</strong>{t('organization.capabilities')}</span>
             <span><strong>{overview.totals.activeAssets}</strong>{t('organization.learning')}</span>
           </div>
+          <button type="button" className="ba-button ba-hero-action" onClick={onOpenLearning}>
+            {t('organization.openLearning')}
+          </button>
         </div>
-        <button type="button" className="ba-button" data-variant="primary" onClick={onOpenLearning}>{t('organization.openLearning')}</button>
+        <div className="ba-org-art" aria-hidden="true"><BizAgentMark /></div>
       </header>
 
       <section className="ba-org-map" aria-label={t('organization.map')}>
-        <div className="ba-business-node">
+        {organization.lineHome !== undefined ? <>
+          <button type="button" className="ba-business-node ba-line-node"
+            onClick={() => { onOpenHome(organization.lineHome!) }}>
+            <span className="ba-node-marker" data-type="line" />
+            <div><small>{t('type.line')}</small>
+              <strong>{line?.displayName ?? organization.lineHome}</strong>
+              <code>{organization.lineHome}</code></div>
+          </button>
+          <span className="ba-map-trunk" aria-hidden="true" />
+        </> : null}
+        <button type="button" className="ba-business-node" onClick={() => { onOpenHome(organization.businessHome) }}>
           <span className="ba-node-marker" data-type="business" />
           <div><small>{t('type.business')}</small><strong>{business?.displayName ?? organization.name}</strong><code>{organization.businessHome}</code></div>
-        </div>
+        </button>
         <span className="ba-map-trunk" aria-hidden="true" />
         <div className="ba-member-nodes">
           {organization.members.map((member) => {
@@ -567,8 +752,54 @@ function OrganizationOverview({ overview, onOpenHome, onOpenLearning, t }: {
         <div><span>2</span><p><strong>{t('organization.next.work')}</strong>{t('organization.next.workHint')}</p></div>
         <div><span>3</span><p><strong>{t('organization.next.learn')}</strong>{t('organization.next.learnHint')}</p></div>
       </section>
+      <OrganizationDirectory overview={overview} currentWorkspacePath={currentWorkspacePath} t={t} />
       {unassigned.length > 0 ? <p className="ba-unassigned">{t('organization.unassigned', { count: unassigned.length })}</p> : null}
     </main>
+  )
+}
+
+function OrganizationDirectory({ overview, currentWorkspacePath, t }: {
+  overview: UiOverview
+  currentWorkspacePath: string | undefined
+  t: DashboardProps['t']
+}) {
+  const location = overview.organizationLocation
+
+  return (
+    <section className="ba-organization-location" aria-labelledby="ba-organization-location-title">
+      <div className="ba-location-heading">
+        <div>
+          <p className="ba-org-kicker">{t('location.kicker')}</p>
+          <h4 id="ba-organization-location-title">{t('location.title')}</h4>
+        </div>
+        <p>{t('location.subtitle')}</p>
+      </div>
+      {location === undefined ? (
+        <div className="ba-location-empty">{t('location.legacy', { path: overview.homeRoot })}</div>
+      ) : (
+        <div className="ba-location-content" data-current={samePath(location.workspacePath, currentWorkspacePath) ? 'true' : 'false'}>
+          <OrganizationPathTree workspacePath={location.workspacePath} organizationId={location.organizationId} t={t} />
+          <div className="ba-location-facts">
+            <span>{samePath(location.workspacePath, currentWorkspacePath) ? t('location.current') : t('location.otherWorkspace')}</span>
+            <code>{location.organizationRoot}</code>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function OrganizationPathTree({ workspacePath, organizationId, t }: {
+  workspacePath: string
+  organizationId: string
+  t: DashboardProps['t']
+}) {
+  return (
+    <div className="ba-path-tree" aria-label={t('location.tree')}>
+      <div data-level="0"><span className="ba-folder-mark" /> <strong>{workspaceName(workspacePath)}</strong><small>{t('location.workspace')}</small></div>
+      <div data-level="1"><span className="ba-folder-mark" /> <strong>bizagent</strong><small>{t('location.container')}</small></div>
+      <div data-level="2"><span className="ba-folder-mark" data-active="true" /> <strong>{organizationId || 'organization-id'}</strong><small>{t('location.organization')}</small></div>
+    </div>
   )
 }
 
@@ -614,15 +845,19 @@ function HomeDirectory({ homes, selected, onSelect, onCreate, t }: {
   )
 }
 
-function HomeWorkspace({ detail, selectedAsset, onSelectAsset, t }: {
+function HomeWorkspace({ api, detail, sessionId, selectedAsset, onSelectAsset, onOpenPrincipal, t }: {
+  api: BizAgentUiPort
   detail: UiHomeDetail
+  sessionId: string | undefined
   selectedAsset: string | undefined
   onSelectAsset: (id: string) => void
+  onOpenPrincipal: (homeAddress: string) => Promise<void>
   t: DashboardProps['t']
 }) {
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<'all' | LearningKind>('all')
   const [status, setStatus] = useState<'all' | UiAsset['status']>('all')
+  const [openError, setOpenError] = useState<string>()
   const summary = detail.home
   const incoming = detail.proposals.filter(proposal => proposal.toAddress === summary.address && proposal.status === 'pending').length
   const filtered = useMemo(() => {
@@ -648,6 +883,10 @@ function HomeWorkspace({ detail, selectedAsset, onSelectAsset, t }: {
           </div>
           <h3 className="ba-home-heading">{summary.displayName}</h3>
           <div className="ba-address-line">{summary.address}</div>
+          <button type="button" className="ba-button" onClick={() => {
+            void onOpenPrincipal(summary.address).catch(cause => { setOpenError(errorMessage(cause)) })
+          }}>{t('home.openPrincipal')}</button>
+          {openError ? <p className="ba-inline-error" role="alert">{openError}</p> : null}
           <div className="ba-home-stats">
             <span>{t('home.episodes', { count: detail.episodes })}</span>
             <span>{t('home.activeAssets', { count: detail.assets.filter(asset => asset.status === 'active').length })}</span>
@@ -660,7 +899,11 @@ function HomeWorkspace({ detail, selectedAsset, onSelectAsset, t }: {
         </blockquote>
       </section>
 
+      <LearningSchedulePanel key={summary.address} api={api} home={summary.address} t={t} />
+
       <MemoryStrata detail={detail} t={t} />
+
+      <WorklogPanel key={summary.address} detail={detail} t={t} />
 
       <section className="ba-ledger">
         <div className="ba-ledger-head">
@@ -693,7 +936,9 @@ function HomeWorkspace({ detail, selectedAsset, onSelectAsset, t }: {
           <ul className="ba-asset-list">
             {filtered.map(asset => (
               <AssetRow
+                api={api}
                 asset={asset}
+                sessionId={sessionId}
                 open={selectedAsset === asset.id}
                 onToggle={() => { onSelectAsset(asset.id) }}
                 t={t}
@@ -704,6 +949,125 @@ function HomeWorkspace({ detail, selectedAsset, onSelectAsset, t }: {
         )}
       </section>
     </>
+  )
+}
+
+function LearningSchedulePanel({ api, home, t }: {
+  api: BizAgentUiPort; home: string; t: DashboardProps['t']
+}) {
+  const [status, setStatus] = useState<UiLearningSchedule>()
+  const [enabled, setEnabled] = useState(false)
+  const [cron, setCron] = useState('')
+  const [dailyRuns, setDailyRuns] = useState(1)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const adopt = (value: UiLearningSchedule): void => {
+    setStatus(value)
+    setEnabled(value.hostEnabled && value.configured && (value.policy?.enabled ?? true))
+    setCron(value.schedule?.cron ?? '')
+    setDailyRuns(value.schedule?.dailyRuns ?? 1)
+    setError(undefined)
+  }
+  const refresh = async (signal?: AbortSignal): Promise<void> => {
+    adopt(await api.learningSchedule(home, signal))
+  }
+  useEffect(() => {
+    const abort = new AbortController()
+    void refresh(abort.signal).catch(cause => { if (!abort.signal.aborted) setError(errorMessage(cause)) })
+    return () => { abort.abort() }
+  }, [api, home])
+  const save = async (): Promise<void> => {
+    if (!status) return
+    setBusy(true)
+    setError(undefined)
+    try {
+      const updated = await api.configureLearningSchedule(home, status.policy?.revision ?? 0,
+        enabled, cron, dailyRuns)
+      adopt(updated)
+    } catch (cause) { setError(errorMessage(cause)) }
+    finally { setBusy(false) }
+  }
+  const available = status?.hostEnabled && status.configured
+  const latest = status?.recentLaunches[0]
+  return <section className="ba-ledger ba-learning-schedule">
+    <div className="ba-ledger-head"><div className="ba-ledger-title"><h3>{t('learningSchedule.title')}</h3></div>
+      <button type="button" disabled={busy} onClick={() => { void refresh().catch(cause => setError(errorMessage(cause))) }}>
+        {t('dashboard.refresh')}</button></div>
+    <p>{t(status === undefined ? 'dashboard.loading'
+      : available ? 'learningSchedule.available' : 'learningSchedule.unavailable')}</p>
+    {available && status?.schedule ? <>
+      <div className="ba-learning-schedule-fields">
+        <label><span>{t('learningSchedule.enabled')}</span>
+          <input type="checkbox" checked={enabled} disabled={busy}
+            onChange={event => { setEnabled(event.target.checked) }} /></label>
+        <label><span>{t('learningSchedule.cron')}</span>
+          <input className="ba-input" value={cron} disabled={busy} maxLength={100}
+            onChange={event => { setCron(event.target.value) }} /></label>
+        <label><span>{t('learningSchedule.dailyRuns')}</span>
+          <input className="ba-input" type="number" min={1} max={status.maxDailyRuns ?? 1}
+            value={dailyRuns} disabled={busy}
+            onChange={event => { setDailyRuns(Number(event.target.value)) }} /></label>
+      </div>
+      <small>{t('learningSchedule.model')}: {status.schedule.model} · {t('learningSchedule.maxRuns')}: {status.maxDailyRuns}</small>
+      <div className="ba-subscription-actions"><button type="button" disabled={busy}
+        onClick={() => { void save() }}>{t('learningSchedule.save')}</button></div>
+    </> : null}
+    {status?.nextDueAt ? <p>{t('learningSchedule.next')}: {new Date(status.nextDueAt).toLocaleString()}
+      {status.cursor?.lastOutcome ? ` · ${t('learningSchedule.last')}: ${status.cursor.lastOutcome}` : ''}</p> : null}
+    {latest ? <p>{t('learningSchedule.latestRun')}: {latest.status} · {latest.id}</p> : null}
+    {error ? <p className="ba-inline-error" role="alert">{error}</p> : null}
+  </section>
+}
+
+function WorklogPanel({ detail, t }: { detail: UiHomeDetail; t: DashboardProps['t'] }) {
+  const [openId, setOpenId] = useState<string>()
+  return (
+    <section className="ba-ledger ba-worklogs">
+      <div className="ba-ledger-head">
+        <div className="ba-ledger-title">
+          <h3>{t('worklogs.title')}</h3>
+          <span className="ba-ledger-count">{t('worklogs.count', { count: detail.worklogCount })}</span>
+        </div>
+        <p className="ba-worklog-note">{t('worklogs.note')}</p>
+      </div>
+      {detail.worklogs.length === 0 ? <p className="ba-worklog-empty">{t('worklogs.empty')}</p> : (
+        <ul className="ba-asset-list">
+          {detail.worklogs.map(item => {
+            const open = openId === item.id
+            return (
+              <li className="ba-asset-item" key={item.id}>
+                <button type="button" className="ba-asset-row ba-worklog-row" aria-expanded={open}
+                  onClick={() => { setOpenId(open ? undefined : item.id) }}>
+                  <span className="ba-kind-chip ba-worklog-status" data-status={item.status}>
+                    {t(`worklogs.${item.status}` as 'worklogs.completed')}
+                  </span>
+                  <span>
+                    <span className="ba-asset-description">{item.description}</span>
+                    <span className="ba-asset-tags">{formatTime(item.recordedAt)} · {t('worklogs.revision', { revision: item.revision })}
+                      {item.origin === 'work-result' ? ` · ${t('worklogs.auto')}`
+                        : item.origin === 'session-activity' ? ` · ${t('worklogs.sessionActivity')}` : ''}</span>
+                  </span>
+                  <span className="ba-asset-metrics">{item.files.length > 0 ? t('worklogs.files', { count: item.files.length }) : ''}</span>
+                </button>
+                {open ? <div className="ba-asset-detail">
+                  <p className="ba-detail-copy">{item.body}</p>
+                  <div className="ba-evidence">
+                    <h4>{t('worklogs.references')}</h4>
+                    <code>{t('worklogs.session')}: {item.sessionId}</code>
+                    {item.workId !== undefined ? <code>Work: {item.workId}</code> : null}
+                    {item.projectId !== undefined ? <code>Project: {item.projectId}</code> : null}
+                    {item.files.map(path => <code key={path}>{path}</code>)}
+                  </div>
+                </div> : null}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {detail.worklogCount > detail.worklogs.length ? (
+        <p className="ba-worklog-note">{t('worklogs.more', { count: detail.worklogCount - detail.worklogs.length })}</p>
+      ) : null}
+    </section>
   )
 }
 
@@ -736,8 +1100,10 @@ function MemoryStrata({ detail, t }: { detail: UiHomeDetail; t: DashboardProps['
   )
 }
 
-function AssetRow({ asset, open, onToggle, t }: {
+function AssetRow({ api, asset, sessionId, open, onToggle, t }: {
+  api: BizAgentUiPort
   asset: UiAsset
+  sessionId: string | undefined
   open: boolean
   onToggle: () => void
   t: DashboardProps['t']
@@ -769,11 +1135,73 @@ function AssetRow({ asset, open, onToggle, t }: {
           <div className="ba-evidence">
             <h4>{t('asset.evidenceTitle')} · {t('asset.evidence', { count: asset.sourceRefs.length })} · {t('asset.receipts', { count: asset.receiptCount })}</h4>
             {asset.sourceRefs.map((ref, index) => <code key={`${ref.type}-${String(index)}`}>{compactEvidence(ref)}</code>)}
+            {asset.proposalApplications?.length ? <>
+              <h4>{t('asset.proposalHistory')}</h4>
+              {asset.proposalApplications.map(item => <code key={item.proposalId}>
+                {item.proposalId} · {t('asset.revision', { revision: item.revision })} · {item.bodySha256.slice(0, 12)}
+              </code>)}
+            </> : null}
           </div>
+          <MemoryUseOutcomesPanel key={`${sessionId ?? 'none'}:${asset.id}`}
+            api={api} assetId={asset.id} sessionId={sessionId} t={t} />
         </div>
       ) : null}
     </li>
   )
+}
+
+function MemoryUseOutcomesPanel({ api, assetId, sessionId, t }: {
+  api: BizAgentUiPort
+  assetId: string
+  sessionId: string | undefined
+  t: DashboardProps['t']
+}) {
+  const [page, setPage] = useState<UiMemoryUseOutcomes>()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string>()
+  useEffect(() => {
+    setPage(undefined)
+    setError(undefined)
+    if (!sessionId) return
+    const abort = new AbortController()
+    setLoading(true)
+    void api.memoryUseOutcomes(sessionId, assetId, undefined, abort.signal)
+      .then(setPage)
+      .catch(cause => { if (!abort.signal.aborted) setError(errorMessage(cause)) })
+      .finally(() => { if (!abort.signal.aborted) setLoading(false) })
+    return () => { abort.abort() }
+  }, [api, assetId, sessionId])
+  const more = async (): Promise<void> => {
+    if (!sessionId || !page?.nextBeforeWorkId || loading) return
+    setLoading(true)
+    setError(undefined)
+    try {
+      const next = await api.memoryUseOutcomes(sessionId, assetId, page.nextBeforeWorkId)
+      setPage({ ...next, outcomes: [...page.outcomes, ...next.outcomes] })
+    } catch (cause) { setError(errorMessage(cause)) }
+    finally { setLoading(false) }
+  }
+  return <section className="ba-memory-use">
+    <h4>{t('asset.useOutcomes')}</h4>
+    <p>{t('asset.useNote')}</p>
+    {!sessionId ? <p>{t('asset.useSessionRequired')}</p>
+      : error ? <p className="ba-inline-error" role="alert">{t('asset.useUnavailable')}: {error}</p>
+        : loading && !page ? <p>{t('dashboard.loading')}</p>
+          : page?.outcomes.length === 0 ? <p>{t('asset.useEmpty')}</p> : null}
+    {page?.outcomes.map(item => <article className="ba-memory-use-work" key={item.workId}>
+      <strong>{item.resultSubject ?? item.workId}</strong>
+      <small>{item.completedAt ? formatTime(item.completedAt) : item.workId} · {t('asset.workSource')}: {t(`asset.source.${item.workSourceStatus}`)}</small>
+      {item.resultBody ? <p className="ba-detail-copy">{item.resultBody}</p> : null}
+      <div className="ba-memory-use-receipts">
+        {item.uses.map(use => <span key={use.receiptId}>
+          {t(`asset.use.${use.signal}`)} · REV {use.assetRevision ?? '?'} · {t(`asset.source.${use.sourceStatus}`)}
+        </span>)}
+      </div>
+      {item.omittedReceipts > 0 ? <small>{t('asset.useOmitted', { count: item.omittedReceipts })}</small> : null}
+    </article>)}
+    {page?.nextBeforeWorkId ? <button type="button" disabled={loading} onClick={() => { void more() }}>
+      {t('asset.useMore')}</button> : null}
+  </section>
 }
 
 function ProposalInbox({ detail, selected, onSelect, onDecision, api, t }: {
@@ -808,6 +1236,7 @@ function ProposalInbox({ detail, selected, onSelect, onDecision, api, t }: {
               {selected === proposal.id && detail !== undefined ? (
                 <ProposalDecision
                   proposal={proposal}
+                  targetAsset={detail.assets.find(asset => asset.id === proposal.baseAsset?.id)}
                   ownerAddress={detail.home.address}
                   api={api}
                   onDecision={onDecision}
@@ -818,21 +1247,99 @@ function ProposalInbox({ detail, selected, onSelect, onDecision, api, t }: {
           ))}
         </ul>
       )}
+      <SharedKnowledgeReviewPanel api={api} t={t} />
     </aside>
   )
 }
 
-function ProposalDecision({ proposal, ownerAddress, api, onDecision, t }: {
+function SharedKnowledgeReviewPanel({ api, t }: { api: BizAgentUiPort; t: DashboardProps['t'] }) {
+  const [reviews, setReviews] = useState<UiSharedKnowledgeReviews>()
+  const [selected, setSelected] = useState<string>()
+  const [decision, setDecision] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const refresh = async (signal?: AbortSignal): Promise<void> => {
+    const next = await api.sharedKnowledgeReviews?.(signal)
+    if (!signal?.aborted) setReviews(next)
+  }
+  useEffect(() => {
+    const controller = new AbortController()
+    void refresh(controller.signal).catch(cause => {
+      if (!controller.signal.aborted) setError(errorMessage(cause))
+    })
+    return () => controller.abort()
+  }, [api])
+  if (!reviews) return null
+  const pending = reviews.proposals.filter(item => item.proposal.status === 'pending')
+  const item = pending.find(entry => entry.proposal.id === selected)
+  const decide = async (action: 'accept' | 'reject'): Promise<void> => {
+    if (!item || !decision.trim() || busy || !api.decideSharedKnowledge) return
+    setBusy(true)
+    setError(undefined)
+    try {
+      await api.decideSharedKnowledge({ proposalId: item.proposal.id, action, decision: decision.trim() })
+      setSelected(undefined)
+      setDecision('')
+      await refresh()
+    } catch (cause) { setError(errorMessage(cause)) }
+    finally { setBusy(false) }
+  }
+  return <section className="ba-shared-knowledge-reviews">
+    <div className="ba-pane-head"><h3 className="ba-pane-title">{t('sharedKnowledge.title')}</h3>
+      <button type="button" disabled={busy} onClick={() => {
+        void refresh().catch(cause => setError(errorMessage(cause)))
+      }}>{t('dashboard.refresh')}</button></div>
+    {pending.length === 0 ? <p>{t('sharedKnowledge.empty')}</p> : <ul className="ba-proposal-list">
+      {pending.map(entry => <li className="ba-proposal-card" key={entry.proposal.id}>
+        <button type="button" className="ba-proposal-summary"
+          aria-expanded={selected === entry.proposal.id}
+          onClick={() => { setSelected(entry.proposal.id); setDecision('') }}>
+          <strong>{entry.proposal.description}</strong>
+          <small>{entry.proposal.target.scope === 'line'
+            ? `line:${entry.proposal.target.line}` : 'platform'} · {entry.proposal.fromAddress}</small>
+        </button>
+      </li>)}
+    </ul>}
+    {item ? <div className="ba-proposal-form">
+      <p className="ba-proposal-current-body">{item.proposal.body}</p>
+      <label><span className="ba-field-label">{t('proposal.decision')}</span>
+        <textarea className="ba-textarea" value={decision} maxLength={4000}
+          placeholder={t('proposal.decisionPlaceholder')}
+          onChange={event => setDecision(event.target.value)} /></label>
+      <div className="ba-proposal-actions">
+        {item.actions.reject ? <button type="button" className="ba-button" data-variant="danger"
+          disabled={busy || !decision.trim()} onClick={() => { void decide('reject') }}>
+          {t('proposal.reject')}</button> : null}
+        {item.actions.accept ? <button type="button" className="ba-button" data-variant="primary"
+          disabled={busy || !decision.trim()} onClick={() => { void decide('accept') }}>
+          {t('proposal.accept')}</button> : null}
+      </div>
+    </div> : null}
+    {error ? <p className="ba-inline-error" role="alert">{error}</p> : null}
+  </section>
+}
+
+function ProposalDecision({ proposal, targetAsset, ownerAddress, api, onDecision, t }: {
   proposal: UiHomeDetail['proposals'][number]
+  targetAsset: UiHomeDetail['assets'][number] | undefined
   ownerAddress: string
   api: BizAgentUiPort
   onDecision: (detail: UiHomeDetail) => Promise<void>
   t: DashboardProps['t']
 }) {
-  const [kind, setKind] = useState<LearningKind>(proposal.proposedKind === 'identity' ? 'memory' : proposal.proposedKind)
   const [decision, setDecision] = useState('')
   const [busy, setBusy] = useState<'accept' | 'reject'>()
   const [error, setError] = useState<string>()
+  const [reviewActions, setReviewActions] = useState({ accept: false, reject: false })
+  useEffect(() => {
+    const controller = new AbortController()
+    void api.proposalReviewActions?.(ownerAddress, proposal.id, controller.signal).then(actions => {
+      if (!controller.signal.aborted) setReviewActions(actions)
+    })
+    return () => controller.abort()
+  }, [api, ownerAddress, proposal.id])
+  const targetChanged = proposal.baseAsset !== undefined && (!targetAsset
+    || targetAsset.revision !== proposal.baseAsset.revision || targetAsset.status !== 'active')
 
   const decide = async (action: 'accept' | 'reject'): Promise<void> => {
     if (!decision.trim() || busy !== undefined) return
@@ -844,7 +1351,6 @@ function ProposalDecision({ proposal, ownerAddress, api, onDecision, t }: {
         proposalId: proposal.id,
         action,
         decision: decision.trim(),
-        ...(action === 'accept' ? { kind } : {}),
       })
       await onDecision(updated)
     } catch (cause) {
@@ -856,13 +1362,22 @@ function ProposalDecision({ proposal, ownerAddress, api, onDecision, t }: {
 
   return (
     <div className="ba-proposal-form">
-      <label>
-        <span className="ba-field-label">{t('proposal.kind')}</span>
-        <select className="ba-select" value={kind} onChange={(event) => { setKind(event.target.value as LearningKind) }}>
-          {KINDS.map(value => <option value={value} key={value}>{t(`kind.${value}` as 'kind.memory')}</option>)}
-        </select>
-      </label>
-      <label>
+      {proposal.baseAsset ? (
+        <div className="ba-proposal-target">
+          <strong>{t('proposal.replaceTarget', { id: proposal.baseAsset.id,
+            revision: proposal.baseAsset.revision })}</strong>
+          {targetAsset ? <>
+            <p>{t('proposal.currentVersion', { revision: targetAsset.revision })}</p>
+            <p className="ba-proposal-current-body">{targetAsset.body}</p>
+          </> : <p>{t('proposal.targetMissing')}</p>}
+          {targetChanged ? <p role="alert">{t('proposal.targetChanged')}</p> : null}
+        </div>
+      ) : null}
+      <div className="ba-proposal-target">
+        <strong>{t('proposal.proposedBody')}</strong>
+        <p className="ba-proposal-current-body">{proposal.body}</p>
+      </div>
+      {!reviewActions.accept && !reviewActions.reject ? <p>{t('proposal.reviewUnavailable')}</p> : <label>
         <span className="ba-field-label">{t('proposal.decision')}</span>
         <textarea
           className="ba-textarea"
@@ -870,16 +1385,16 @@ function ProposalDecision({ proposal, ownerAddress, api, onDecision, t }: {
           placeholder={t('proposal.decisionPlaceholder')}
           onChange={(event) => { setDecision(event.target.value) }}
         />
-      </label>
+      </label>}
       {error !== undefined ? <p className="ba-inline-error" role="alert">{t('proposal.failed', { message: error })}</p> : null}
-      <div className="ba-proposal-actions">
-        <button type="button" className="ba-button" data-variant="danger" disabled={!decision.trim() || busy !== undefined} onClick={() => { void decide('reject') }}>
+      {reviewActions.accept || reviewActions.reject ? <div className="ba-proposal-actions">
+        {reviewActions.reject ? <button type="button" className="ba-button" data-variant="danger" disabled={!decision.trim() || busy !== undefined} onClick={() => { void decide('reject') }}>
           <IconWarningOutline16 size={14} /> {t('proposal.reject')}
-        </button>
-        <button type="button" className="ba-button" data-variant="primary" disabled={!decision.trim() || busy !== undefined} onClick={() => { void decide('accept') }}>
+        </button> : null}
+        {reviewActions.accept ? <button type="button" className="ba-button" data-variant="primary" disabled={!decision.trim() || busy !== undefined || targetChanged} onClick={() => { void decide('accept') }}>
           <IconCheckOutline16 size={14} /> {t('proposal.accept')}
-        </button>
-      </div>
+        </button> : null}
+      </div> : null}
     </div>
   )
 }
@@ -992,6 +1507,7 @@ function EmptyState({ title, hint }: { title: string; hint: string }) {
 
 function compactEvidence(ref: UiAsset['sourceRefs'][number]): string {
   if (ref.type === 'session-events') return `session:${ref.sessionId} · events ${String(ref.fromSeq)}–${String(ref.toSeq)}`
+  if (ref.type === 'worklog') return `worklog:${ref.sessionId} · ${ref.revisionId}`
   if (ref.type === 'tool-result') return `tool:${ref.toolCallId} · session:${ref.sessionId} · event ${String(ref.eventSeq)}`
   if (ref.type === 'asset') return `${ref.ownerAddress}/${ref.assetId}@${String(ref.revision)}`
   if (ref.type === 'user-confirmation') return `confirmation:${ref.sessionId} · event ${String(ref.eventSeq)}`
@@ -1075,6 +1591,42 @@ function emptyCapability(index: number, t: DashboardProps['t']): CapabilityDraft
     displayName: t('setup.newCapability'),
     responsibility: t('setup.newCapabilityResponsibility'),
   }
+}
+
+function currentDshWorkspace(
+  workspaces: readonly WorkspaceView[],
+  currentSessionId?: string,
+  cwd?: string,
+): WorkspaceView | undefined {
+  if (currentSessionId !== undefined) {
+    const owner = workspaces.find(workspace => workspace.sessionIds.some(value => String(value) === currentSessionId))
+    if (owner !== undefined) return owner
+  }
+  if (cwd === undefined) return undefined
+  return [...workspaces]
+    .filter(workspace => pathContains(workspace.path, cwd))
+    .sort((a, b) => b.path.length - a.path.length)[0]
+}
+
+function workspaceName(path: string): string {
+  const parts = normalizedClientPath(path).split('/').filter(Boolean)
+  return parts.at(-1) ?? path
+}
+
+function samePath(left?: string, right?: string): boolean {
+  if (left === undefined || right === undefined) return false
+  return normalizedClientPath(left) === normalizedClientPath(right)
+}
+
+function pathContains(root: string, target: string): boolean {
+  const normalizedRoot = normalizedClientPath(root)
+  const normalizedTarget = normalizedClientPath(target)
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`)
+}
+
+function normalizedClientPath(value: string): string {
+  const normalized = value.replaceAll('\\', '/').replace(/\/+$/g, '')
+  return /^[A-Z]:\//.test(normalized) ? normalized.toLocaleLowerCase() : normalized
 }
 
 function safeSlug(value: string): string {

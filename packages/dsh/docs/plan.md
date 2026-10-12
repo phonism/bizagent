@@ -1,12 +1,20 @@
 # BizAgent 完整计划
 
 状态：实施基线（Draft 1）
+
+阅读提示：本文保留产品探索与计划，包含未实现的功能及当时设想的安装方式。当前可运行步骤以
+[快速上手](quickstart.md)为准，实际行为见[架构](architecture.md)、[生命周期](learning-lifecycle.md)和
+[工具参考](tools.md)。
 日期：2026-08-29
 设计基线：DeepSeek Harness `0.1.1-rc.2`，commit `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`
 
 实施注记（`0.1.0-alpha.2`）：在不引入通用反思循环的前提下，已提前交付只识别明确纠正的 P0 Lite
 Learning Checkpoint、可回读的 Session Evidence，以及 DSH Web UI 插件。本文其余里程碑仍描述更广义的
 高价值信号检测与组织级学习目标。
+
+当前 checkout 的 Unreleased 改动又增加了只读共享 Home Frame 工具、`@Agent` 输入触发源、
+context epoch 与压缩后刷新、会话参与状态展示，以及显式增量材料水位。Frame 的
+`lead/contribute/reference` 尚不改变有效 Agent 身份或工具权限；本节 M6 仍代表完整组织上下文目标。
 
 ## 1. 一句话定义
 
@@ -666,7 +674,7 @@ v0.1 不是“先做一堆基础类”，而是完成下面两条可演示链路
 - npm tarball 和 DSH compatibility matrix；
 - 数据 schema version 与 migration 框架。
 
-退出条件：在干净机器/容器中按 README 从安装到完成两条 demo；没有依赖 GrowthOS 私有代码或数据。
+退出条件：在干净机器/容器中按 README 从安装到完成两条 demo；没有依赖私有代码或数据。
 
 ### M6：v0.2 组织上下文（后续）
 

@@ -32,8 +32,9 @@ DSH 继续负责 Session、Turn、Transcript、模型、工具执行、沙箱、
 - file-first Home Store；
 - Home 到 DSH Session 的 Episode Index，不复制 transcript；
 - DSH `storageDomain` 中的绑定、索引、proposal、revision 和 receipt；
-- Memory 的 search/read/remember/update/retire；
+- Memory/Insight/Knowledge/Method 的 search/read/remember/update/retire，以及候选核验后显式 publish；
 - 明确纠正触发的有界 Learning Checkpoint；
+- candidate 不进入常驻索引，revise 保留生命周期状态，publish 按审阅 revision 检查并发修改；
 - 可回读原始 Session event 的 evidence 工具；
 - 跨 Home propose/list/accept/reject；
 - 持久、可 replay 的 Context Bundle；
@@ -128,11 +129,11 @@ bizagent_memory_remember
 bizagent_memory_update
 bizagent_memory_propose
 bizagent_proposals
-bizagent_proposal_accept
-bizagent_proposal_reject
 bizagent_learning_checkpoint
 bizagent_memory_feedback
 ```
+
+此处早期 MVP 的 Agent 提案裁决工具已移除；当前接受和拒绝由宿主认证的真人路由完成。
 
 ## 8. 完成定义
 

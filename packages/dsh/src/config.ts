@@ -2,6 +2,25 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import Schema from '@deepseek-ai/schemastery'
 import { type ContextBudget, type HomeAddress, parseHomeAddress } from './domain.js'
+import { nextCronAt } from './cron.js'
+
+export interface LearningScheduleConfig {
+  home: string
+  cron: string
+  model: string
+  provider?: string
+  maxTokens?: number
+  dailyRuns?: number
+}
+
+export interface ResolvedLearningSchedule {
+  home: HomeAddress
+  cron: string
+  model: string
+  provider?: string
+  maxTokens?: number
+  dailyRuns: number
+}
 
 export interface Config {
   homeRoot?: string
@@ -12,6 +31,8 @@ export interface Config {
   identityMaxBytes?: number
   indexMaxBytes?: number
   learningCheckpointEnabled?: boolean
+  learningSchedulerEnabled?: boolean
+  learningSchedules?: LearningScheduleConfig[]
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -23,6 +44,13 @@ export const Config: Schema<Config> = Schema.object({
   identityMaxBytes: Schema.number().step(1).min(256).default(6144),
   indexMaxBytes: Schema.number().step(1).min(512).default(16384),
   learningCheckpointEnabled: Schema.boolean().default(true),
+  learningSchedulerEnabled: Schema.boolean().default(false).description(
+    'Run host-configured learning schedules every 30 seconds. Enable on exactly one host process for this profile.'),
+  learningSchedules: Schema.array(Schema.object({
+    home: Schema.string(), cron: Schema.string(), model: Schema.string(),
+    provider: Schema.string(), maxTokens: Schema.number().step(1).min(1),
+    dailyRuns: Schema.number().step(1).min(1).max(4).default(1),
+  })).default([]),
 })
 
 export interface ResolvedConfig {
@@ -33,6 +61,8 @@ export interface ResolvedConfig {
   workspaceHomes: ReadonlyArray<{ root: string; address: HomeAddress }>
   budget: ContextBudget
   learningCheckpointEnabled: boolean
+  learningSchedulerEnabled: boolean
+  learningSchedules: ReadonlyArray<ResolvedLearningSchedule>
 }
 
 export function resolveConfig(input: Config = {}): ResolvedConfig {
@@ -56,6 +86,34 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
   if (!Number.isSafeInteger(indexMaxBytes) || indexMaxBytes < 512) {
     throw new TypeError('indexMaxBytes must be an integer >= 512')
   }
+  const learningSchedules = (input.learningSchedules ?? []).map(item => {
+    const home = parseHomeAddress(item.home)
+    const cron = item.cron.trim()
+    nextCronAt(cron, Date.now())
+    const model = item.model.trim()
+    const provider = item.provider?.trim()
+    const dailyRuns = item.dailyRuns ?? 1
+    if (!model || model.length > 200) throw new TypeError('learning schedule model must contain 1 to 200 characters')
+    if (provider !== undefined && (!provider || provider.length > 200)) {
+      throw new TypeError('learning schedule provider must contain 1 to 200 characters')
+    }
+    if (!Number.isSafeInteger(dailyRuns) || dailyRuns < 1 || dailyRuns > 4) {
+      throw new TypeError('learning schedule dailyRuns must be between 1 and 4')
+    }
+    if (item.maxTokens !== undefined && (!Number.isSafeInteger(item.maxTokens) || item.maxTokens < 1)) {
+      throw new TypeError('learning schedule maxTokens must be a positive integer')
+    }
+    if (workspaceHomes.filter(mapping => mapping.address === home).length !== 1) {
+      throw new TypeError(`learning schedule Home ${home} requires exactly one mapped Workspace`)
+    }
+    return { home, cron, model, dailyRuns,
+      ...(provider ? { provider } : {}),
+      ...(item.maxTokens ? { maxTokens: item.maxTokens } : {}),
+    }
+  })
+  if (new Set(learningSchedules.map(item => item.home)).size !== learningSchedules.length) {
+    throw new TypeError('learning schedules require distinct Homes')
+  }
   return {
     homeRoot,
     ...(defaultHome !== undefined ? { defaultHome } : {}),
@@ -64,6 +122,8 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     workspaceHomes,
     budget: { identityMaxBytes, indexMaxBytes },
     learningCheckpointEnabled: input.learningCheckpointEnabled ?? true,
+    learningSchedulerEnabled: input.learningSchedulerEnabled ?? false,
+    learningSchedules,
   }
 }
 

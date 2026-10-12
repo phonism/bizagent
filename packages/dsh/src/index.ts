@@ -1,29 +1,102 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { foldSurface, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
-import { Config, type Config as BizAgentConfig, resolveConfig } from './config.js'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { Config, type Config as BizAgentConfig, type ResolvedConfig, resolveConfig } from './config.js'
 import { HomeStore } from './home-store.js'
 import { LearningLedger } from './ledger.js'
+import { WorkLedger } from './work-ledger.js'
+import { ProjectLedger } from './project-ledger.js'
+import { WorklogLedger } from './worklog-ledger.js'
 import { BizAgentService } from './service.js'
+import { WorkRunner } from './work-runner.js'
+import { AgentSessionCoordinator } from './agent-session-coordinator.js'
+import { LearningSessionRunner } from './learning-session-runner.js'
+import { LearningScheduler } from './learning-scheduler.js'
+import { InboxWakeRunner } from './inbox-wake-runner.js'
+import { InboxReturnNotifier } from './inbox-return-notifier.js'
+import { interruptProjectSessions } from './project-runtime.js'
+export { createProjectInterventionRuntimeHooks } from './project-runtime.js'
+import { loadActiveOrganizationLocation, type ActiveOrganizationLocation } from './organization-location.js'
+import { RuntimeWriterGuard } from './writer-guard.js'
 import { registerTools } from './tools.js'
 
 export const name = 'bizagent'
-export const inject = ['tools', 'systemPrompt', 'storageDomain', 'sessionQuery']
+export const inject = ['tools', 'systemPrompt', 'storageDomain', 'sessionQuery', 'agents', 'agentDefaultModel']
 export { Config }
 export type { BizAgentConfig as ConfigInput }
 export { HomeStore } from './home-store.js'
+export { AgentSessionCoordinator } from './agent-session-coordinator.js'
+export { principalSessionId, projectMainAddress, projectMainSessionId } from './agent-session-address.js'
+export { RuntimeWriterGuard } from './writer-guard.js'
+export { exportHomeArchive, verifyHomeArchive, importHomeArchive, HomeArchiveManifestSchema } from './home-archive.js'
+export type { HomeArchiveManifest } from './home-archive.js'
 export { LearningLedger, BIZAGENT_DOMAIN } from './ledger.js'
+export { evaluateWorkOutput } from './work-output-eval.js'
+export type { WorkOutputSourceEvaluation, WorkOutputVerdict } from './work-output-eval.js'
+export { WorkLedger, BIZAGENT_WORK_DOMAIN, FormalWorkSchema } from './work-ledger.js'
+export type { FormalWork } from './work-ledger.js'
+export { ProjectLedger, BIZAGENT_PROJECT_DOMAIN, FormalProjectSchema, ProjectWorkflowSchema, ProjectSeatSchema } from './project-ledger.js'
+export type { FormalProject, ProjectWorkflow, ProjectSeat } from './project-ledger.js'
+export { WorklogLedger, BIZAGENT_WORKLOG_DOMAIN, WorklogRevisionSchema } from './worklog-ledger.js'
+export type { WorklogRevision } from './worklog-ledger.js'
+export { nextCronAt } from './cron.js'
+export { BIZAGENT_PROPOSAL_REVIEW_API, createProposalReviewHttpHandler,
+  registerProposalReviewRoute } from './proposal-review-transport.js'
+export type { ProposalReviewPrincipal, ProposalReviewRouteOptions } from './proposal-review-transport.js'
+export { BIZAGENT_PROJECT_REVIEW_API } from './ui-contract.js'
+export { createProjectReviewHttpHandler, registerProjectReviewRoute } from './project-review-transport.js'
+export { createProjectDeliveryFeedbackHttpHandler, registerProjectDeliveryFeedbackRoute } from './project-delivery-feedback-transport.js'
+export type { ProjectDeliveryFeedbackPrincipal, ProjectDeliveryFeedbackRouteOptions } from './project-delivery-feedback-transport.js'
+export { createProjectRoleAssignmentHttpHandler, registerProjectRoleAssignmentRoute } from './project-role-assignment-transport.js'
+export type { ProjectRoleAssignmentPrincipal, ProjectRoleAssignmentRouteOptions } from './project-role-assignment-transport.js'
+export type { ProjectReviewPrincipal, ProjectReviewRouteOptions } from './project-review-transport.js'
+export { createProjectNodeReviewHttpHandler, registerProjectNodeReviewRoute } from './project-node-review-transport.js'
+export type { ProjectNodeReviewPrincipal, ProjectNodeReviewRouteOptions } from './project-node-review-transport.js'
+export { createProjectInterventionHttpHandler, registerProjectInterventionRoute } from './project-intervention-transport.js'
+export type { ProjectInterventionPrincipal, ProjectInterventionRouteOptions } from './project-intervention-transport.js'
+export { createProjectPlanHttpHandler, registerProjectPlanRoute } from './project-plan-transport.js'
+export type { ProjectPlanPrincipal, ProjectPlanRouteOptions } from './project-plan-transport.js'
 export { BizAgentService } from './service.js'
+export { WorkRunner } from './work-runner.js'
+export { LearningSessionRunner } from './learning-session-runner.js'
+export { LearningScheduler } from './learning-scheduler.js'
+export type { LearningScheduleStatus } from './learning-scheduler.js'
+export { InboxWakeRunner } from './inbox-wake-runner.js'
+export { InboxStalledEscalationRunner } from './inbox-stalled-escalation-runner.js'
+export { INBOX_STALE_ESCALATE_MS, stalledInboxTopics } from './inbox-stalled-topic.js'
+export type { StalledInboxTopic } from './inbox-stalled-topic.js'
+export type { EscalationOwnerDecision, StalledEscalationPass } from './inbox-stalled-escalation-runner.js'
+export { InboxReturnNotifier } from './inbox-return-notifier.js'
+export { HUMAN_INBOX_API, createHumanInboxHttpHandler, registerHumanInboxRoute } from './human-inbox-transport.js'
+export type { HumanInboxPrincipal, HumanInboxRouteOptions } from './human-inbox-transport.js'
+export { HumanNotificationRunner } from './human-notification-runner.js'
+export type { HumanNotificationProvider, HumanNotificationRequest, HumanNotificationOutcome,
+  HumanNotificationPass, HumanNotificationRunnerOptions, HumanNotificationPolicyDecision } from './human-notification-runner.js'
+export { HumanTurnCompletionNotifier, humanTurnInboxMessageId,
+  humanTurnSubject, humanTurnBody } from './human-turn-completion.js'
+export type { HumanTurnCandidate, HumanTurnDestination, HumanTurnCompletionSource,
+  HumanTurnPersistence, HumanTurnCompletionPass } from './human-turn-completion.js'
+export { HumanNotificationWebhook } from './human-notification-webhook.js'
+export type { HumanNotificationWebhookOptions } from './human-notification-webhook.js'
+export { InboxWakePolicySchema, inboxWakeSchedule, DEFAULT_INBOX_WAKE_POLICY } from './inbox-wake-policy.js'
+export type { InboxWakePolicy } from './inbox-wake-policy.js'
+export * from './organization-location.js'
 export * from './domain.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     bizagent: BizAgentService
+    bizagentLearningScheduler: LearningScheduler
+    bizagentProjects: ProjectLedger
+    bizagentAgentSessions: AgentSessionCoordinator
   }
 }
 
@@ -31,28 +104,118 @@ const LEARNING_POLICY = `BizAgent provides the long-term Home bound to this sess
 
 - Treat Working Context and DSH transcript as evidence, not automatically as long-term truth.
 - Save a Memory only when an observation is likely to help future work; keep the description concise and the body specific.
+- Keep observations and their context in Memory, supported inferences in Insight, established facts in Knowledge, and repeatable procedures in Method. Do not generalize one outcome into a rule.
+- Save learning that still needs validation as candidate. Find candidates with status=candidate, read their body and evidence, then publish with the revision you reviewed. Revising a candidate does not publish it.
 - Search and read indexed assets before relying on them. Do not infer an asset body from its one-line description.
+- When another shared Home is relevant, use bizagent_agent_search if its address is unclear, then explicitly open a read-only Agent Frame and search/read its active assets as needed. A selected @Agent mention is a request to open the named Frame, not evidence that its Home has already been read; call bizagent_frame_open before answering from it. Reopening an unchanged Frame reuses its index; a successful DSH compaction makes the next open resend Frame context automatically, and refresh=true forces a new copy at any time. A Frame is context in this Session, not an independently running Agent or a change of tool authority. Close it when no longer relevant. Personal Homes cannot be opened across Home boundaries in this local alpha.
+- Use bizagent_episodes and bizagent_episode_read to inspect earlier work in this Home when it is relevant; a transcript is evidence, not a ready-made rule.
+- Record a concise, Session-bound Worklog when work needs a searchable outcome or file trail. Worklogs are explicit revisions linked to raw Session evidence; they are not validated Memory. Use bizagent_worklogs to find one, bizagent_worklog_read to check its source and file status, and bizagent_worklog_file_read to inspect retained file bytes.
+- During a deliberate learning review, use bizagent_learning_materials to find changed Sessions and authored Worklogs. Read the relevant Session events or exact Worklog revision before calling bizagent_learning_review; listing or opening material does not mean it was processed. Review one frozen material at a time, even when no new memory is warranted.
 - Write only to the current Home. When learning belongs to another Personal, Business, Role, or Capability Home, create a proposal.
+- Use Inbox for ordinary asynchronous messages that need another Home to read or answer later. Read the pending digest with bizagent_inbox_read, reply with bizagent_inbox_send, and mark the incoming message handled only after review. Eligible owned and mapped primary recipients wake in a separate Session; delivery itself does not mean a wake succeeded or any work was completed. When a topic approaches its 6-hop or 12-message limit, finish the outcome in a Workspace file and send kind=conclusion with that file in context_refs instead of extending the relay.
+- When another Home must own a defined deliverable, create formal Work with a goal, acceptance criteria, and stable idempotency key. A mapped assignee Workspace lets BizAgent start an independent DSH worker Session. If launch is unavailable, the assignee must use bizagent_work_accept in the exact Session that will perform it. Complete with bizagent_work_complete; cite files under artifacts/ with artifact_refs to freeze their bytes. Use bizagent_work_output_eval for narrow checks on the frozen result, and bizagent_work_artifact_read to inspect the actual bytes before accepting it. An Inbox reply or handled receipt is not completion.
+- For a longer goal, create a Project with a concrete done_when standard. A dynamic Project can attach formal Work by project_id. A frozen Workflow Project dispatches ready nodes through bizagent_project_node_dispatch; node dependencies advance from completed formal Work and, when assigned, the reviewer Home's decision on the exact result. If an approved source artifact changes, the lead Home must use bizagent_project_node_reopen to record why the node and its completed descendants need new Work attempts. Submit a versioned result only after linked Work is terminal and every Workflow node is done; cite files under artifacts/ with artifact_refs to retain their exact bytes, or provide a delivered formal Work result. A lead Home review records acceptance or rework; Home review does not prove a human reviewed it or that DSH runtime activity stopped.
+- For Project collaboration, the lead can use bizagent_project_invite to give an active shared Home a durable Seat with a named responsibility and Project read access. An invitation does not accept or dispatch Work. In an open dynamic Project, the lead or an active Seat Home can use bizagent_project_delegate to invite another shared Home and create formal Work in one step. The Work records the Project Seat addresses, while execution stays in the assignee Home Workspace. The lead can release a Seat with bizagent_project_seat_release after its linked Work is settled.
+- For ordinary messages inside a Project, pass project_id to bizagent_inbox_send. Joined Agent Home recipients resolve to their Project Seat addresses; replies inherit the Project from reply_to and preserve historical recipient relationships. The sender and recipient Sessions still execute under their own Home bindings. An ordinary Inbox reply does not complete formal Project Work.
+- In an ordinary Home Session, call bizagent_project_turn_join with the Project ID before doing Project work in each turn. It records that exact turn for pause and resume inspection; later unrelated turns in the same Session remain independent. A formal Work accept records its current turn automatically. Joining does not grant new Project permissions.
 - Record confirmation, contradiction, or failure when later work tests a recalled asset.
 - Never rewrite Identity automatically.`
 
 const HOME_SNAPSHOT_MARKER = 'BizAgent Home Snapshot v1'
+const INBOX_DIGEST_MARKER = 'BizAgent Inbox Digest v1'
 
 export async function apply(ctx: Context, input: BizAgentConfig = {}): Promise<void> {
   const config = resolveConfig(input)
-  const store = new HomeStore(config.homeRoot)
+  const activeOrganization = await loadActiveOrganizationLocation(config.homeRoot)
+  const profileRoot = resolve(process.env['DSH_HOME']?.trim() || join(homedir(), '.dsh'))
+  const roots = [profileRoot, config.homeRoot,
+    ...(activeOrganization ? [activeOrganization.organizationRoot] : [])]
+  const writerGuard = await RuntimeWriterGuard.acquire(roots)
+  try {
+    const currentOrganization = await loadActiveOrganizationLocation(config.homeRoot)
+    if (currentOrganization?.organizationRoot !== activeOrganization?.organizationRoot) {
+      throw new Error('active organization changed while acquiring the BizAgent writer guard; retry startup')
+    }
+    ctx.effect(() => async () => writerGuard.release())
+    await applyLocked(ctx, config, activeOrganization)
+  } catch (error) {
+    await writerGuard.release()
+    throw error
+  }
+}
+
+async function applyLocked(ctx: Context, config: ResolvedConfig,
+  activeOrganization: ActiveOrganizationLocation | undefined): Promise<void> {
+  const store = new HomeStore(activeOrganization?.organizationRoot ?? config.homeRoot)
   await store.initialize()
   const ledger = await LearningLedger.open(ctx.storageDomain)
-  const service = new BizAgentService(store, ledger, config, ctx.sessionQuery)
+  let workLedger: WorkLedger
   try {
-    await service.initialize()
+    workLedger = await WorkLedger.open(ctx.storageDomain)
   } catch (error) {
     await ledger.close()
     throw error
   }
+  let projectLedger: ProjectLedger
+  try {
+    projectLedger = await ProjectLedger.open(ctx.storageDomain)
+  } catch (error) {
+    await Promise.all([ledger.close(), workLedger.close()])
+    throw error
+  }
+  let worklogLedger: WorklogLedger
+  try {
+    worklogLedger = await WorklogLedger.open(ctx.storageDomain)
+  } catch (error) {
+    await Promise.all([ledger.close(), workLedger.close(), projectLedger.close()])
+    throw error
+  }
+  const service = new BizAgentService(store, ledger, config, ctx.sessionQuery, undefined, activeOrganization, workLedger, projectLedger, worklogLedger)
+  try {
+    await service.initialize()
+  } catch (error) {
+    await Promise.all([ledger.close(), workLedger.close(), projectLedger.close(), worklogLedger.close()])
+    throw error
+  }
 
-  ctx.effect(() => async () => service.close())
+  const workRunner = new WorkRunner(ctx.agents, ctx.sessionQuery, service, config,
+    () => { const { provider, model } = ctx.agentDefaultModel.currentSelection(); return { provider, model } })
+  const agentSessions = new AgentSessionCoordinator(ctx.agents, ctx.sessionQuery, service,
+    () => { const { provider, model } = ctx.agentDefaultModel.currentSelection(); return { provider, model } })
+  service.projectMainProvisioner = async projectId => {
+    const opened = await agentSessions.openProjectMain(projectId)
+    return { sessionId: opened.sessionId }
+  }
+  const learningRunner = new LearningSessionRunner(ctx.agents, ctx.sessionQuery, service, config)
+  const learningScheduler = new LearningScheduler(service, learningRunner, config)
+  const inboxWakeRunner = new InboxWakeRunner(ctx.agents, ctx.sessionQuery, service, config)
+  const inboxReturnNotifier = new InboxReturnNotifier(ctx.agents, ctx.sessionQuery, ledger,
+    (sessionId, error) => service.recordRuntimeError(`Inbox return ${sessionId}`, error),
+    address => service.inboxAddressHome(address, true),
+    (address, message) => !service.projectSeatPaused(address)
+      && !service.projectLeadWakeBlocked(message, address)
+      && (message.projectId === undefined || !service.projectExecutionPaused(message.projectId)
+        || service.projectHumanAnswerMessage(message, address)))
+  let workRecoveryTimer: ReturnType<typeof setInterval> | undefined
+  let learningRecoveryTimer: ReturnType<typeof setInterval> | undefined
+  let learningScheduleTimer: ReturnType<typeof setInterval> | undefined
+  let inboxWakeTimer: ReturnType<typeof setInterval> | undefined
+  ctx.effect(() => async () => {
+    if (workRecoveryTimer) clearInterval(workRecoveryTimer)
+    if (learningRecoveryTimer) clearInterval(learningRecoveryTimer)
+    if (learningScheduleTimer) clearInterval(learningScheduleTimer)
+    if (inboxWakeTimer) clearInterval(inboxWakeTimer)
+    await workRunner.close()
+    await agentSessions.close()
+    await learningRunner.close()
+    await inboxWakeRunner.close()
+    await inboxReturnNotifier.close()
+    await service.close()
+  })
   ctx.provide('bizagent', service)
+  ctx.provide('bizagentLearningScheduler', learningScheduler)
+  ctx.provide('bizagentProjects', projectLedger)
+  ctx.provide('bizagentAgentSessions', agentSessions)
 
   ctx.systemPrompt.section({
     name: 'bizagent:learning-policy',
@@ -61,17 +224,29 @@ export async function apply(ctx: Context, input: BizAgentConfig = {}): Promise<v
   })
   ctx.on('agent/session-start', ({ agent }) => {
     const snapshot = service.contextSnapshotForSession(String(agent.id), agent.session.header.cwd)
-    if (snapshot === undefined || hasCurrentSnapshot(agent.session.events, snapshot)) return
-    const text = renderHomeSnapshot(snapshot)
-    agent.inject(createUserMessage({
-      content: [{ type: 'text', text }],
-      source: {
-        kind: 'plugin',
-        plugin: 'bizagent',
-        form: 'snapshot',
-        sections: [{ name: 'home-context', text }],
-      },
-    }))
+    if (snapshot !== undefined && !hasCurrentSnapshot(agent.session.events, snapshot)) {
+      const text = renderHomeSnapshot(snapshot)
+      agent.inject(createUserMessage({
+        content: [{ type: 'text', text }],
+        source: {
+          kind: 'plugin',
+          plugin: 'bizagent',
+          form: 'snapshot',
+          sections: [{ name: 'home-context', text }],
+        },
+      }))
+    }
+    const wakeOrigin = ledger.getInboxWakeOrigin(String(agent.id))
+    const ordinaryWake = wakeOrigin !== undefined && ledger.getInboxWakePlan(wakeOrigin.wakePlanId) !== undefined
+    const inbox = ordinaryWake ? undefined
+      : service.pendingInboxDigestForSession(String(agent.id), agent.session.header.cwd)
+    if (inbox !== undefined && !hasCurrentInboxDigest(agent.session.events, inbox.digest)) {
+      const text = renderInboxDigest(inbox)
+      agent.inject(createUserMessage({
+        content: [{ type: 'text', text }],
+        source: { kind: 'plugin', plugin: 'bizagent', form: 'notice', summary: 'Pending Inbox messages.' },
+      }))
+    }
   })
 
   ctx.on('agent/turn-stopping', async ({ agent, turn }) => {
@@ -106,7 +281,182 @@ export async function apply(ctx: Context, input: BizAgentConfig = {}): Promise<v
     ).catch(error => service.recordRuntimeError(`checkpoint ${String(session.id)}:${event.data.turn}`, error))
   })
 
-  registerTools(ctx, service)
+  ctx.on('session/flush', async session => {
+    const sessionId = String(session.id)
+    try {
+      const logs = await service.reconcileCompletedWorklogs(20, sessionId)
+      for (const failure of logs.failed) {
+        service.recordRuntimeError(`Worklog recovery ${failure.workId}`, failure.error)
+      }
+    } catch (error) { service.recordRuntimeError(`Worklog recovery scan ${sessionId}`, error) }
+    try {
+      const logs = await service.reconcileSessionWorklogs(20, sessionId)
+      for (const failure of logs.failed) {
+        service.recordRuntimeError(`Session Worklog recovery ${failure.sessionId}`, failure.error)
+      }
+    } catch (error) { service.recordRuntimeError(`Session Worklog scan ${sessionId}`, error) }
+  })
+
+  let inboxWakePass: Promise<void> | undefined
+  let inboxWakeQueued = false
+  let inboxReturnPass: Promise<void> | undefined
+  let inboxReturnQueued = false
+  const runInboxReturn = (): Promise<void> => {
+    if (inboxReturnPass) {
+      inboxReturnQueued = true
+      return inboxReturnPass
+    }
+    const task = inboxReturnNotifier.recoverBatch().then(result => {
+      for (const failure of result.failed) {
+        service.recordRuntimeError(`Inbox return ${failure.messageId}`, failure.error)
+      }
+    }).finally(() => {
+      if (inboxReturnPass === task) inboxReturnPass = undefined
+      if (inboxReturnQueued) {
+        inboxReturnQueued = false
+        void runInboxReturn().catch(error => service.recordRuntimeError('Inbox queued return', error))
+      }
+    })
+    inboxReturnPass = task
+    return task
+  }
+  const runInboxWake = (): Promise<void> => {
+    if (inboxWakePass) {
+      inboxWakeQueued = true
+      return inboxWakePass
+    }
+    const task = inboxWakeRunner.recoverBatch().then(result => {
+      for (const failure of result.failed) {
+        service.recordRuntimeError(`Inbox wake ${failure.planId}`, failure.error)
+      }
+    }).finally(() => {
+      if (inboxWakePass === task) inboxWakePass = undefined
+      if (inboxWakeQueued) {
+        inboxWakeQueued = false
+        void runInboxWake().catch(error => service.recordRuntimeError('Inbox queued wake', error))
+      }
+    })
+    inboxWakePass = task
+    return task
+  }
+  const runInboxDelivery = async (): Promise<void> => {
+    const humanHandoffs = await service.reconcileProjectHumanHandoffs()
+    for (const failure of humanHandoffs.failed) {
+      service.recordRuntimeError(`Project human handoff ${failure.projectId}/${failure.handoffId}`, failure.error)
+    }
+    const progressionNotices = await service.reconcileProjectProgressionNotifications()
+    for (const failure of progressionNotices.failed) {
+      service.recordRuntimeError(`Project progression notice ${failure.projectId}/${failure.revision}`, failure.error)
+    }
+    const nodeDecisions = await service.reconcileProjectNodeDecisionNotifications()
+    for (const failure of nodeDecisions.failed) {
+      service.recordRuntimeError(`Project node decision notice ${failure.projectId}/${failure.workId}`, failure.error)
+    }
+    const outcomeReworks = await service.reconcileProjectOutcomeReworkNotifications()
+    for (const failure of outcomeReworks.failed) {
+      service.recordRuntimeError(`Project outcome rework notice ${failure.projectId}/${failure.claimId}`, failure.error)
+    }
+    const deliveryFeedback = await service.reconcileProjectDeliveryFeedbackNotifications()
+    for (const failure of deliveryFeedback.failed) {
+      service.recordRuntimeError(`Project delivery feedback notice ${failure.projectId}/${failure.feedbackId}`, failure.error)
+    }
+    await runInboxReturn()
+    await runInboxWake()
+  }
+  registerTools(ctx, service, workRunner, learningRunner, message => {
+    if (message.replyTo !== undefined || message.priority === 'urgent') {
+      void runInboxDelivery().catch(error => service.recordRuntimeError('Inbox delivery kick', error))
+    }
+  })
+  const runProjectPauseRecovery = async (): Promise<void> => {
+    const result = await service.reconcilePausedProjects()
+    for (const item of result.repaired) {
+      const interruption = interruptProjectSessions(ctx.agents, service,
+        item.projectId, item.coordinatorSessionId ?? '')
+      for (const id of interruption.failed) {
+        service.recordRuntimeError(`Project pause interrupt ${item.projectId}/${id}`,
+          new Error('bound Project Session could not be interrupted'))
+      }
+    }
+    for (const failure of result.failed) {
+      service.recordRuntimeError(`Project pause recovery ${failure.projectId}`, failure.error)
+    }
+  }
+  await runProjectPauseRecovery()
+  const worklogStartupRecovery = await service.reconcileCompletedWorklogs()
+  for (const failure of worklogStartupRecovery.failed) {
+    service.recordRuntimeError(`Worklog recovery ${failure.workId}`, failure.error)
+  }
+  const sessionWorklogStartupRecovery = await service.reconcileSessionWorklogs()
+  for (const failure of sessionWorklogStartupRecovery.failed) {
+    service.recordRuntimeError(`Session Worklog recovery ${failure.sessionId}`, failure.error)
+  }
+  let workRecoveryPass: Promise<void> | undefined
+  const runWorkRecovery = (): Promise<void> => {
+    if (workRecoveryPass) return workRecoveryPass
+    const task = runProjectPauseRecovery().then(async () => {
+      const workNotices = await service.reconcileWorkNotifications()
+      for (const failure of workNotices.failed) {
+        service.recordRuntimeError(`Work notice ${failure.phase} ${failure.workId}`, failure.error)
+      }
+      return workRunner.recoverBatch()
+    }).then(async result => {
+      for (const failure of result.reserved.failed) {
+        service.recordRuntimeError(`Work recovery ${failure.workId}`, failure.error)
+      }
+      for (const failure of result.queued.failed) {
+        service.recordRuntimeError(`Work queued recovery ${failure.workId}`, failure.error)
+      }
+      const supplements = await workRunner.recoverSupplements()
+      for (const failure of supplements.failed) {
+        service.recordRuntimeError(`Project Work supplement recovery ${failure.workId}`, failure.error)
+      }
+      const logs = await service.reconcileCompletedWorklogs()
+      for (const failure of logs.failed) {
+        service.recordRuntimeError(`Worklog recovery ${failure.workId}`, failure.error)
+      }
+      const sessionLogs = await service.reconcileSessionWorklogs()
+      for (const failure of sessionLogs.failed) {
+        service.recordRuntimeError(`Session Worklog recovery ${failure.sessionId}`, failure.error)
+      }
+    }).finally(() => { if (workRecoveryPass === task) workRecoveryPass = undefined })
+    workRecoveryPass = task
+    return task
+  }
+  await runWorkRecovery()
+  const learningRecovery = await learningRunner.recoverBatch()
+  for (const failure of learningRecovery.failed) {
+    service.recordRuntimeError(`Learning Session recovery ${failure.id}`, failure.error)
+  }
+  learningRecoveryTimer = setInterval(() => {
+    void learningRunner.recoverBatch().then(result => {
+      for (const failure of result.failed) {
+        service.recordRuntimeError(`Learning Session recovery ${failure.id}`, failure.error)
+      }
+    }).catch(error => service.recordRuntimeError('Learning Session recovery tick', error))
+  }, 30_000)
+  learningRecoveryTimer.unref()
+  if (config.learningSchedulerEnabled) {
+    const tick = () => { void learningScheduler.runDue()
+      .catch(error => service.recordRuntimeError('learning schedule tick', error)) }
+    learningScheduleTimer = setInterval(tick, 30_000)
+    learningScheduleTimer.unref()
+    tick()
+  }
+  workRecoveryTimer = setInterval(() => {
+    void runWorkRecovery().catch(error => service.recordRuntimeError('Work recovery tick', error))
+  }, 30_000)
+  workRecoveryTimer.unref()
+  await inboxWakeRunner.scanNudges()
+  await runInboxDelivery()
+  let inboxNudgeTicks = 0
+  inboxWakeTimer = setInterval(() => {
+    void (async () => {
+      if (++inboxNudgeTicks % 10 === 0) await inboxWakeRunner.scanNudges()
+      await runInboxDelivery()
+    })().catch(error => service.recordRuntimeError('Inbox delivery tick', error))
+  }, 30_000)
+  inboxWakeTimer.unref()
 }
 
 interface HomeSnapshot {
@@ -128,13 +478,7 @@ function renderHomeSnapshot(snapshot: HomeSnapshot): string {
 }
 
 function hasCurrentSnapshot(events: readonly SessionEvent[], snapshot: HomeSnapshot): boolean {
-  let visible = events
-  try {
-    const nodes = new Set(foldSurface(events).nodes)
-    if (nodes.size > 0) visible = events.filter(event => nodes.has(event.seq))
-  } catch {
-    // Tests and imported legacy logs may omit surface markers; scanning them is fail-safe for duplicate prevention.
-  }
+  const visible = visibleEvents(events)
   const identity = [
     HOME_SNAPSHOT_MARKER,
     `Address: ${snapshot.homeAddress}`,
@@ -147,6 +491,52 @@ function hasCurrentSnapshot(events: readonly SessionEvent[], snapshot: HomeSnaps
     const text = event.data.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n')
     return identity.every(line => text.includes(line))
   })
+}
+
+function visibleEvents(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  let visible = events
+  try {
+    const nodes = new Set(foldSurface(events).nodes)
+    if (nodes.size > 0) visible = events.filter(event => nodes.has(event.seq))
+  } catch {
+    // Tests and imported legacy logs may omit surface markers; scanning them is fail-safe for duplicate prevention.
+  }
+  return visible
+}
+
+function hasCurrentInboxDigest(events: readonly SessionEvent[], digest: string): boolean {
+  return visibleEvents(events).some((event) => {
+    if (event.type !== 'user/message') return false
+    if (event.data.source.kind !== 'plugin' || event.data.source.plugin !== 'bizagent') return false
+    const text = event.data.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n')
+    return text.includes(INBOX_DIGEST_MARKER) && text.includes(`Digest: ${digest}`)
+  })
+}
+
+function renderInboxDigest(inbox: {
+  homeAddress: string
+  total: number
+  digest: string
+  messages: Array<{ id: string; fromAddress: string; subject: string; kind: string; priority: string;
+    convergence?: { topicId: string; hop: number; topicCount: number } }>
+}): string {
+  const converging = new Map<string, { topicId: string; hop: number; topicCount: number }>()
+  for (const message of inbox.messages) {
+    const topic = message.convergence
+    if (topic && topic.hop > (converging.get(topic.topicId)?.hop ?? -1)) {
+      converging.set(topic.topicId, topic)
+    }
+  }
+  return [
+    INBOX_DIGEST_MARKER,
+    `Address: ${inbox.homeAddress}`,
+    `Digest: ${inbox.digest}`,
+    `Pending: ${inbox.total}`,
+    ...inbox.messages.map(message => `- ${message.id} [${message.kind}, ${message.priority}] ${message.fromAddress}: ${message.subject}`),
+    ...(inbox.total > inbox.messages.length ? [`- ${inbox.total - inbox.messages.length} more; use bizagent_inbox.`] : []),
+    ...[...converging.values()].map(topic => `Topic ${topic.topicId} is at ${topic.topicCount}/12 ordinary messages and hop ${topic.hop}/6. Conclude this turn: write the outcome to a Workspace file, then send kind=conclusion with context_refs. Further ordinary messages cannot reset the topic limit.`),
+    'Use bizagent_inbox_read for the body. Reading alone does not mark a message handled.',
+  ].join('\n')
 }
 
 function renderCheckpointPrompt(checkpoint: {

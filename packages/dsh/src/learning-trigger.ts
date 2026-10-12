@@ -31,20 +31,17 @@ export class ExplicitCorrectionTrigger implements LearningTrigger {
   detect(events: readonly SessionEvent[], turn: number): LearningTriggerMatch | undefined {
     const startIndex = findTurnStart(events, turn)
     if (startIndex < 0) return undefined
-    const turnEvents = events.slice(startIndex)
-    if (turnEvents.some((event) => {
-      if (event.type !== 'tool/call'
-        && event.type !== 'tool/code-dispatch'
-        && event.type !== 'tool/code-dispatch-start') return false
-      return event.data.name === 'bizagent_memory_remember'
-        || event.data.name === 'bizagent_learning_checkpoint'
-    })) return undefined
+    const nextTurn = events.findIndex((event, index) => index > startIndex && event.type === 'turn/start')
+    const turnEvents = events.slice(startIndex, nextTurn < 0 ? undefined : nextTurn)
 
     for (let index = turnEvents.length - 1; index >= 0; index -= 1) {
       const event = turnEvents[index]
       if (event?.type !== 'user/message' || event.data.source.kind !== 'user') continue
       const text = textContent(event.data.content).trim()
       if (text.length === 0 || !EXPLICIT_CORRECTION_PATTERNS.some(pattern => pattern.test(text))) continue
+      // Dispatch alone is not learning: failed, aborted, or unfinished writes must
+      // still reach the checkpoint. A later correction also needs its own write.
+      if (hasCompletedLearning(turnEvents, event.seq)) return undefined
       return {
         reason: 'explicit-correction',
         evidenceRef: {
@@ -58,6 +55,29 @@ export class ExplicitCorrectionTrigger implements LearningTrigger {
     }
     return undefined
   }
+}
+
+function hasCompletedLearning(events: readonly SessionEvent[], afterSeq: number): boolean {
+  type CodeDispatchEvent = { type: 'tool/code-dispatch-start' | 'tool/code-dispatch'; seq: number;
+    data: { subCallId: string; name: string; isError?: boolean } }
+  const calls = new Set<string>()
+  const codeStarts = new Map<string, number>()
+  const isLearningTool = (name: string): boolean => name === 'bizagent_memory_remember'
+    || name === 'bizagent_learning_checkpoint'
+  for (const raw of events) {
+    // Older DSH event logs contain Code Mode dispatches outside the current SDK union.
+    const event = raw as SessionEvent | CodeDispatchEvent
+    if (event.type === 'tool/code-dispatch-start') codeStarts.set(event.data.subCallId, event.seq)
+    if (event.seq <= afterSeq) continue
+    if (event.type === 'tool/call' && isLearningTool(event.data.name)) calls.add(event.data.callId)
+    if (event.type === 'tool/result' && event.data.error === undefined) {
+      const result = event.data.message.content[0]
+      if (calls.has(result.toolCallId) && !result.isError) return true
+    }
+    if (event.type === 'tool/code-dispatch' && isLearningTool(event.data.name)
+      && !event.data.isError && (codeStarts.get(event.data.subCallId) ?? event.seq) > afterSeq) return true
+  }
+  return false
 }
 
 function findTurnStart(events: readonly SessionEvent[], turn: number): number {

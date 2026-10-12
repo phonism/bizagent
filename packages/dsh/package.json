@@ -2,6 +2,15 @@
   "name": "@bizagent/dsh",
   "version": "0.1.0-alpha.2",
   "description": "A DSH-native organizational learning layer with Agent Homes, multi-level memory, and governed cross-agent learning.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phonism/bizagent.git",
+    "directory": "packages/dsh"
+  },
+  "homepage": "https://github.com/phonism/bizagent/tree/main/packages/dsh#readme",
+  "bugs": {
+    "url": "https://github.com/phonism/bizagent/issues"
+  },
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -13,6 +22,10 @@
     "./ui-host": {
       "types": "./lib/ui-host.d.ts",
       "default": "./lib/ui-host.js"
+    },
+    "./local-human-host": {
+      "types": "./lib/local-human-host.d.ts",
+      "default": "./lib/local-human-host.js"
     },
     "./client": {
       "types": "./lib/client-types/client/index.d.ts",
@@ -29,11 +42,8 @@
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md",
-    "docs/quickstart.md",
-    "docs/mvp.md",
-    "docs/p0-lite.md",
-    "docs/ui.md",
-    "docs/decisions/0002-ui-plugin-boundary.md",
+    "docs",
+    "examples",
     "LICENSE"
   ],
   "scripts": {
@@ -43,7 +53,18 @@
     "build": "npm run clean && npm run build:host && npm run build:client",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "examples": "npm run build && node examples/learning-lab.mjs",
     "smoke": "npm run build && node scripts/smoke.mjs",
+    "smoke:profile": "npm run build && node scripts/profile-smoke.mjs",
+    "smoke:local-human": "npm run build && BIZAGENT_PROFILE_SMOKE_HUMAN=1 node scripts/profile-smoke.mjs",
+    "smoke:packed": "npm run build && node scripts/profile-smoke.mjs --packed",
+    "smoke:install": "npm run build && node scripts/installed-profile-smoke.mjs --install-only",
+    "smoke:installed": "npm run build && node scripts/installed-profile-smoke.mjs",
+    "smoke:plugin-add": "npm run build && node scripts/plugin-add-smoke.mjs",
+    "smoke:agent": "npm run build && node scripts/agent-profile-smoke.mjs",
+    "smoke:work": "npm run build && node scripts/work-profile-smoke.mjs",
+    "smoke:project": "npm run build && node scripts/project-profile-smoke.mjs",
+    "smoke:learning": "npm run build && node scripts/learning-profile-smoke.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "dsh": {
@@ -55,7 +76,9 @@
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-ui-sidebar"
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-conversation"
       ],
       "platform": "web"
     }
@@ -64,30 +87,39 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-agent": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-attachment": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-agent-default-model": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-locale": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-input-trigger": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-ui-layout": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-ui-sidebar": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-llm": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-session": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-session-query": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-skill": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-storage-domain": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-system-prompt": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-tools": "^0.1.1-rc.2"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1",
-    "yaml": "^2.8.1",
-    "zod": "^4.4.3"
+    "@deepseek-ai/schemastery": "3.18.1",
+    "yaml": "2.9.0",
+    "zod": "4.5.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-agent": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-attachment": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.1-rc.2",
     "@deepseek-ai/dsh-client-locale": "0.1.1-rc.2",
     "@deepseek-ai/dsh-client-runtime": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-input-trigger": "0.1.1-rc.2",
     "@deepseek-ai/dsh-client-ui-layout": "0.1.1-rc.2",
     "@deepseek-ai/dsh-client-ui-primitives": "0.1.1-rc.2",
     "@deepseek-ai/dsh-client-ui-sidebar": "0.1.1-rc.2",
@@ -96,6 +128,7 @@
     "@deepseek-ai/dsh-llm": "0.1.1-rc.2",
     "@deepseek-ai/dsh-session": "0.1.1-rc.2",
     "@deepseek-ai/dsh-session-query": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-skill": "0.1.1-rc.2",
     "@deepseek-ai/dsh-storage-domain": "0.1.1-rc.2",
     "@deepseek-ai/dsh-system-prompt": "0.1.1-rc.2",
     "@deepseek-ai/dsh-tools": "0.1.1-rc.2",

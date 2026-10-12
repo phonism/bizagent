@@ -1,0 +1,8 @@
+node_modules/
+src/
+tests/
+scripts/
+tsconfig*.json
+*.tgz
+*.log
+.DS_Store

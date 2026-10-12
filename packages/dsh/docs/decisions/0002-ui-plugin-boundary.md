@@ -10,7 +10,7 @@ BizAgent UI 使用 DSH `dsh.client` 机制发布，通过标准 UI slots 组合�
 
 ## 原因
 
-GrowthOS 的核心是 Agent Home、多级 Memory、单 Agent 自进化和多 Agent 组织协作。React 页面不是领域核心，
+BizAgent 的核心是 Agent Home、多级 Memory、单 Agent 自进化和多 Agent 组织协作。React 页面不是领域核心，
 不能成为 Home 持久化或学习闭环的依赖。DSH 已经提供 Client 插件发现、模块加载、slot composition、locale 与 theme，
 BizAgent 应复用这些机制，而不是注入静态页面、fork Web App 或运行独立前端服务。
 

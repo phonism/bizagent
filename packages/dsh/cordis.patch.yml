@@ -10,3 +10,5 @@
         indexMaxBytes: 16384
     - id: bizagent-ui
       name: '@bizagent/dsh/ui-host'
+    - id: bizagent-local-human
+      name: '@bizagent/dsh/local-human-host'

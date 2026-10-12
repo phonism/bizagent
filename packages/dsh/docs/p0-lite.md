@@ -14,7 +14,7 @@ P0 Lite 只证明一条纵向闭环：
 ## 运行协议
 
 1. `ExplicitCorrectionTrigger` 只检查当前 Turn 中直接来自用户的强信号；
-2. 如果当前 Turn 已调用 `bizagent_memory_remember`，不再创建 Checkpoint；
+2. 如果当前 Turn 在最新明确纠正之后已成功完成 `bizagent_memory_remember` 或 `bizagent_learning_checkpoint`，不再创建 Checkpoint；普通工具通过 callId 配对成功结果，Code Mode 检查成功的子调用完成事件；失败、取消或只有开始事件均不算完成；
 3. `agent/turn-stopping` 为同一个 `Session + Turn` 至多创建一次 Checkpoint；
 4. Agent 必须调用 `bizagent_learning_checkpoint`，选择 `remember` 或 `skip`；
 5. `remember` 生成当前 Home 的 active Memory，证据精确指向原始用户消息；
@@ -74,7 +74,7 @@ Checkpoint、Evidence、Memory 和 Fitness 的核心协议。
 
 - 普通 Turn 不产生 Checkpoint；
 - 明确纠正每 Turn 至多触发一次；
-- 已主动 remember 的 Turn 不重复学习；
+- 已成功主动 remember 的纠正不重复学习；失败的写入仍触发 Checkpoint，后到的纠正不被之前的写入吞掉；
 - Checkpoint 重放不产生第二份 Memory；
 - Memory Evidence 能回读到原始纠正；
 - DSH 重启后的新 Session 获得新 Home Revision；

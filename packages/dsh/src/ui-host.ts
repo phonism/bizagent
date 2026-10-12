@@ -1,10 +1,11 @@
 import { Buffer } from 'node:buffer'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
+import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import Schema from '@deepseek-ai/schemastery'
 import { z } from 'zod'
 import {
-  ASSET_KINDS,
   HOME_TYPES,
   type HomeAddress,
   type MemoryProposal,
@@ -14,21 +15,26 @@ import {
 import type { BizAgentService } from './service.js'
 import {
   BIZAGENT_UI_API,
+  BIZAGENT_AGENT_DIRECTORY_API,
+  BIZAGENT_FRAME_STATUS_API,
   type UiAsset,
   type UiAssetCounts,
   type UiCreateHomeRequest,
   type UiCreateOrganizationRequest,
+  type UiFrameParticipation,
   type UiHomeDetail,
   type UiHomeSummary,
   type UiOverview,
-  type UiProposalDecisionRequest,
 } from './ui-contract.js'
 
 export const name = 'bizagent-ui-host'
-export const inject = ['bizagent', 'webServer']
+export const inject = ['bizagent', 'agents', 'sessionQuery', 'bizagentLearningScheduler', 'webServer']
+
+export interface Config {}
+
+export const Config: Schema<Config> = Schema.object({})
 
 const MAX_BODY_BYTES = 64 * 1024
-const MUTABLE_KINDS = ASSET_KINDS.filter(kind => kind !== 'identity')
 
 const CreateHomeSchema = z.object({
   address: z.string().min(3).max(200),
@@ -43,6 +49,7 @@ const SafeIdSchema = z.string().trim().min(1).max(64).regex(
 )
 
 const CreateOrganizationSchema = z.object({
+  workspacePath: z.string().trim().min(1).max(4096),
   id: SafeIdSchema,
   name: z.string().trim().min(1).max(200),
   mission: z.string().trim().min(1).max(2000),
@@ -60,25 +67,62 @@ const CreateOrganizationSchema = z.object({
   })).max(24),
 })
 
-const ProposalDecisionSchema = z.object({
-  ownerAddress: z.string().min(3).max(200),
-  proposalId: z.string().min(1).max(200),
-  action: z.enum(['accept', 'reject']),
-  decision: z.string().trim().min(1).max(4000),
-  kind: z.enum(MUTABLE_KINDS).optional(),
+const LearningScheduleActionSchema = z.object({
+  home: z.string().min(3).max(200),
+  expectedRevision: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  cron: z.string().trim().min(1).max(100),
+  dailyRuns: z.number().int().min(1).max(4),
+})
+const MemoryUseOutcomesQuerySchema = z.object({
+  assetId: z.string().min(1).max(200),
+  beforeWorkId: z.string().min(1).max(200).optional(),
+})
+const AgentDirectoryQuerySchema = z.object({
+  sessionId: z.string().min(1).max(200),
+  query: z.string().max(160).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  target: z.string().min(1).max(200).optional(),
 })
 
 export class BizAgentUiFacade {
   constructor(readonly service: BizAgentService) {}
+
+  async frameParticipation(sessionId: string, cwd: string | undefined,
+    events: readonly SessionEvent[]): Promise<UiFrameParticipation> {
+    const status = await this.service.frameStatusForSession(sessionId, cwd, events)
+    const names = new Map(this.service.store.listHomes().map(home => [home.address, home.displayName]))
+    const stale = new Set(status.staleFrames)
+    return {
+      sessionId,
+      primaryHome: { address: status.state.primaryHome,
+        displayName: names.get(status.state.primaryHome) ?? status.state.primaryHome },
+      frames: status.state.frames.map(frame => ({
+        address: frame.address,
+        displayName: names.get(frame.address) ?? frame.address,
+        mode: frame.mode,
+        focused: status.state.focusAddress === frame.address,
+        refreshRequired: stale.has(frame.address),
+      })),
+    }
+  }
 
   async overview(): Promise<UiOverview> {
     const proposals = this.service.ledger.listProposals()
     const homes = this.service.store.listHomes().map(home => this.homeSummary(home.address, proposals))
     const health = await this.service.store.doctor()
     const organization = this.service.store.getOrganization()
+    const organizationLocation = this.service.getActiveOrganizationLocation()
     return {
       generatedAt: nowIso(),
       homeRoot: this.service.store.root,
+      ...(organizationLocation === undefined ? {} : {
+        organizationLocation: {
+          workspacePath: organizationLocation.workspacePath,
+          organizationId: organizationLocation.organizationId,
+          organizationRoot: organizationLocation.organizationRoot,
+        },
+      }),
       ...(organization === undefined ? {} : { organization }),
       homes,
       proposals,
@@ -115,12 +159,15 @@ export class BizAgentUiFacade {
         status: asset.status,
         revision: asset.revision,
         ...(asset.proposalId !== undefined ? { proposalId: asset.proposalId } : {}),
+        ...(asset.proposalApplications === undefined ? {} : {
+          proposalApplications: asset.proposalApplications }),
         createdAt: asset.createdAt,
         updatedAt: asset.updatedAt,
         receiptCount: assetReceipts.length,
         ...(lastSignal !== undefined ? { lastSignal } : {}),
       }
     })
+    const worklogs = this.service.worklogLedger?.listLatest(address) ?? []
     return {
       home,
       identity: this.service.store.getIdentity(address),
@@ -128,6 +175,15 @@ export class BizAgentUiFacade {
       proposals: this.service.ledger.listProposals()
         .filter(proposal => proposal.fromAddress === address || proposal.toAddress === address),
       episodes: this.service.ledger.listBindings(address).length,
+      worklogCount: worklogs.length,
+      worklogs: worklogs.slice(0, 20).map(item => ({
+        id: item.id, sessionId: item.sessionId, revision: item.revision,
+        description: item.description, body: item.body, status: item.status,
+        ...(item.origin === undefined ? {} : { origin: item.origin }),
+        recordedAt: item.recordedAt, files: item.files.map(file => file.path),
+        ...(item.workId !== undefined ? { workId: item.workId } : {}),
+        ...(item.projectId !== undefined ? { projectId: item.projectId } : {}),
+      })),
     }
   }
 
@@ -144,27 +200,13 @@ export class BizAgentUiFacade {
 
   async createOrganization(request: UiCreateOrganizationRequest): Promise<UiOverview> {
     const input = CreateOrganizationSchema.parse(request)
-    await this.service.store.createOrganization(input)
+    await this.service.createOrganizationInWorkspace(input)
     return this.overview()
-  }
-
-  async decideProposal(request: UiProposalDecisionRequest): Promise<UiHomeDetail> {
-    const input = ProposalDecisionSchema.parse(request)
-    const ownerAddress = parseHomeAddress(input.ownerAddress)
-    if (input.action === 'accept') {
-      await this.service.acceptProposalAsOwner(ownerAddress, {
-        proposalId: input.proposalId,
-        decision: input.decision,
-        ...(input.kind !== undefined ? { kind: input.kind } : {}),
-      })
-    } else {
-      await this.service.rejectProposalAsOwner(ownerAddress, input.proposalId, input.decision)
-    }
-    return this.home(ownerAddress)
   }
 
   private homeSummary(address: HomeAddress, proposals: MemoryProposal[]): UiHomeSummary {
     const home = this.service.store.getHome(address)
+    const chatWorkspacePath = home.type === 'business' ? this.service.chatWorkspacePath(address) : undefined
     const assets = this.service.store.listAssets(address)
     const counts: UiAssetCounts = { memory: 0, insight: 0, knowledge: 0, method: 0 }
     for (const asset of assets) {
@@ -172,6 +214,7 @@ export class BizAgentUiFacade {
     }
     return {
       address,
+      ...(chatWorkspacePath ? { chatWorkspacePath } : {}),
       type: home.type,
       displayName: home.displayName,
       revision: home.revision,
@@ -187,9 +230,108 @@ export class BizAgentUiFacade {
   }
 }
 
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, _config: Config = {}): void {
   const facade = new BizAgentUiFacade(ctx.bizagent)
+  const directorySession = async (req: IncomingMessage) => {
+    const url = new URL(req.url ?? '', 'http://bizagent.local')
+    const input = AgentDirectoryQuerySchema.parse({
+      sessionId: url.searchParams.get('sessionId'),
+      ...(url.searchParams.has('query') ? { query: url.searchParams.get('query') } : {}),
+      ...(url.searchParams.has('limit') ? { limit: url.searchParams.get('limit') } : {}),
+      ...(url.searchParams.has('target') ? { target: url.searchParams.get('target') } : {}),
+    })
+    const live = ctx.agents?.get(input.sessionId as SessionId)
+    if (live !== undefined) {
+      if (String(live.id) !== input.sessionId) {
+        throw new UiRequestError('session-unavailable', 'Session is unavailable for Agent directory lookup.')
+      }
+      return { input, cwd: live.session.header.cwd, events: live.session.events }
+    }
+    let snapshot: Awaited<ReturnType<typeof ctx.sessionQuery.readSession>>
+    try { snapshot = await ctx.sessionQuery.readSession(input.sessionId as SessionId) }
+    catch { throw new UiRequestError('session-unavailable', 'Session is unavailable for Agent directory lookup.') }
+    if (String(snapshot.session.id) !== input.sessionId) {
+      throw new UiRequestError('session-unavailable', 'Session is unavailable for Agent directory lookup.')
+    }
+    return { input, cwd: snapshot.session.cwd, events: snapshot.events }
+  }
   const routes = [
+    ctx.webServer.register({
+      kind: 'exact', path: BIZAGENT_AGENT_DIRECTORY_API,
+      handler: (req, res) => route(req, res, 'GET', async () => {
+        const { input, cwd } = await directorySession(req)
+        return ctx.bizagent.searchHomesForSession(input.sessionId, cwd, {
+          ...(input.query !== undefined ? { query: input.query } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        })
+      }),
+    }),
+    ctx.webServer.register({
+      kind: 'exact', path: `${BIZAGENT_AGENT_DIRECTORY_API}/resolve`,
+      handler: (req, res) => route(req, res, 'GET', async () => {
+        const { input, cwd } = await directorySession(req)
+        if (input.target === undefined) throw new UiRequestError('missing-target', 'Agent target is required.')
+        return ctx.bizagent.resolveHomeForSession(input.sessionId, cwd, input.target)
+      }),
+    }),
+    ctx.webServer.register({
+      kind: 'exact', path: BIZAGENT_FRAME_STATUS_API,
+      handler: (req, res) => route(req, res, 'GET', async () => {
+        const { input, cwd, events } = await directorySession(req)
+        return facade.frameParticipation(input.sessionId, cwd, events)
+      }),
+    }),
+    ctx.webServer.register({
+      kind: 'exact', path: `${BIZAGENT_UI_API}/projects`,
+      handler: (req, res) => route(req, res, 'GET', async () => {
+        const { input, cwd } = await directorySession(req)
+        const beforeProjectId = new URL(req.url ?? '', 'http://bizagent.local')
+          .searchParams.get('beforeProjectId')
+        return ctx.bizagent.listProjectsForSession(input.sessionId, cwd, {
+          limit: 50,
+          ...(beforeProjectId === null ? {} : { beforeProjectId: z.string().min(1).max(200).parse(beforeProjectId) }),
+        })
+      }),
+    }),
+    ctx.webServer.register({
+      kind: 'exact', path: `${BIZAGENT_UI_API}/projects/detail`,
+      handler: (req, res) => route(req, res, 'GET', async () => {
+        const { input, cwd } = await directorySession(req)
+        const projectId = z.string().min(1).max(200).parse(new URL(req.url ?? '', 'http://bizagent.local')
+          .searchParams.get('projectId'))
+        return ctx.bizagent.readProjectForSession(input.sessionId, cwd, projectId)
+      }),
+    }),
+    ctx.webServer.register({
+      kind: 'exact', path: `${BIZAGENT_UI_API}/learning/use-outcomes`,
+      handler: (req, res) => route(req, res, 'GET', async () => {
+        const { input, cwd } = await directorySession(req)
+        const url = new URL(req.url ?? '', 'http://bizagent.local')
+        const query = MemoryUseOutcomesQuerySchema.parse({
+          assetId: url.searchParams.get('assetId'),
+          ...(url.searchParams.has('beforeWorkId') ? { beforeWorkId: url.searchParams.get('beforeWorkId') } : {}),
+        })
+        return ctx.bizagent.memoryUseOutcomesForSession(input.sessionId, cwd, {
+          assetId: query.assetId,
+          ...(query.beforeWorkId === undefined ? {} : { beforeWorkId: query.beforeWorkId }),
+        })
+      }),
+    }),
+    ctx.webServer.register({
+      kind: 'exact', path: `${BIZAGENT_UI_API}/learning/schedule`,
+      handler: (req, res) => route(req, res, 'GET', () => {
+        const home = new URL(req.url ?? '', 'http://bizagent.local').searchParams.get('home')
+        if (!home) throw new UiRequestError('missing-home', 'An Agent Home address is required.')
+        return ctx.bizagentLearningScheduler.status(home)
+      }),
+    }),
+    ctx.webServer.register({
+      kind: 'exact', path: `${BIZAGENT_UI_API}/learning/schedule/configure`,
+      handler: (req, res) => route(req, res, 'POST', async () => {
+        const input = LearningScheduleActionSchema.parse(await readJson(req))
+        return ctx.bizagentLearningScheduler.configure(input.home, input)
+      }),
+    }),
     ctx.webServer.register({
       kind: 'exact',
       path: `${BIZAGENT_UI_API}/overview`,
@@ -222,20 +364,6 @@ export function apply(ctx: Context): void {
           ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
           ...(input.owner !== undefined ? { owner: input.owner } : {}),
           ...(input.identity !== undefined ? { identity: input.identity } : {}),
-        })
-      }),
-    }),
-    ctx.webServer.register({
-      kind: 'exact',
-      path: `${BIZAGENT_UI_API}/proposals/decision`,
-      handler: (req, res) => route(req, res, 'POST', async () => {
-        const input = ProposalDecisionSchema.parse(await readJson(req))
-        return facade.decideProposal({
-          ownerAddress: input.ownerAddress,
-          proposalId: input.proposalId,
-          action: input.action,
-          decision: input.decision,
-          ...(input.kind !== undefined ? { kind: input.kind } : {}),
         })
       }),
     }),

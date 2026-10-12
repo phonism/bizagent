@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import YAML from 'yaml'
 import { z } from 'zod'
@@ -21,6 +21,7 @@ import {
   parseHomeAddress,
   safeHomeId,
 } from './domain.js'
+import { DEFAULT_INBOX_WAKE_POLICY, InboxWakePolicySchema, type InboxWakePolicy } from './inbox-wake-policy.js'
 
 const DIRECTORY_SCHEMA = z.object({
   schemaVersion: z.literal(1),
@@ -86,6 +87,8 @@ export interface CreateAssetInput {
 }
 
 export interface UpdateAssetInput {
+  /** Checked inside the serialized mutation, before reading or writing a new revision. */
+  expectedRevision?: number
   description?: string
   body?: string
   tags?: string[]
@@ -93,6 +96,8 @@ export interface UpdateAssetInput {
   status?: AssetStatus
   confidence?: number
   fitness?: number
+  /** Internal recovery marker, persisted in the same file revision as a proposal replacement. */
+  appliedProposalId?: string
 }
 
 export interface AssetSearchInput {
@@ -175,6 +180,21 @@ export class HomeStore {
     return structuredClone(this.requireHome(parseHomeAddress(address)).home)
   }
 
+  /** The Home's fixed DSH Workspace, shared by Principal, Project Main and Seats. */
+  homeWorkspacePath(address: string): string {
+    return this.requireHome(parseHomeAddress(address)).directory
+  }
+
+  /** Home-local receipt policy. Missing or malformed files use the 15-minute batch default. */
+  async readInboxWakePolicy(address: string): Promise<InboxWakePolicy> {
+    const file = join(this.requireHome(parseHomeAddress(address)).directory, 'inbox.json')
+    try {
+      const info = await lstat(file)
+      if (!info.isFile() || info.size > 4096) return DEFAULT_INBOX_WAKE_POLICY
+      return InboxWakePolicySchema.parse(JSON.parse(await readFile(file, 'utf8')))
+    } catch { return DEFAULT_INBOX_WAKE_POLICY }
+  }
+
   getIdentity(address: string): string {
     return this.requireHome(parseHomeAddress(address)).identity
   }
@@ -199,17 +219,25 @@ export class HomeStore {
       const mission = normalizeBody(input.mission)
       if (input.members.length === 0) throw new Error('organization must have at least one member')
 
+      const lineHome = parseHomeAddress(`line:${id}`)
       const businessHome = parseHomeAddress(`business:${id}`)
+      const lineOwner = normalizeId(input.members[0]!.id, 'line owner')
       const memberHomes: Organization['members'] = []
       const capabilityHomes: HomeAddress[] = []
       const links: Organization['links'] = []
       const homeInputs: CreateHomeInput[] = [{
+        address: lineHome,
+        displayName: `${name} PMO`,
+        owner: lineOwner,
+        identity: `${name} product line PMO. Coordinate its enduring organization and Projects.\n\nMission: ${mission}`,
+      }, {
         address: businessHome,
         displayName: name,
-        owner: name,
+        owner: lineOwner,
         identity: `${name} exists to ${mission}\n\nThis Business Home owns shared goals, decisions, and organizational learning.`,
       }]
-      const addresses = new Set<string>([businessHome])
+      const addresses = new Set<string>([lineHome, businessHome])
+      links.push({ from: businessHome, to: lineHome, relation: 'belongs-to-line' })
       const roles = new Map<string, { name: string; responsibility: string }>()
 
       for (const member of input.members) {
@@ -234,16 +262,17 @@ export class HomeStore {
           homeInputs.push({
             address: roleHome,
             displayName: roleName,
-            owner: name,
+            owner: lineOwner,
             identity: `${roleName} serves ${name}.\n\nEnduring responsibility: ${responsibility}`,
           })
           links.push({ from: roleHome, to: businessHome, relation: 'serves' })
+          links.push({ from: roleHome, to: lineHome, relation: 'belongs-to-line' })
         }
 
         homeInputs.push({
           address: personalHome,
           displayName,
-          owner: name,
+          owner: memberId,
           identity: `${displayName} is a member of ${name} and fulfills the ${roleName} role.\n\nResponsibility: ${responsibility}`,
         })
         memberHomes.push({ personalHome, roleHome })
@@ -264,10 +293,11 @@ export class HomeStore {
         homeInputs.push({
           address: capabilityHome,
           displayName,
-          owner: name,
+          owner: lineOwner,
           identity: `${displayName} is a reusable organizational capability of ${name}.\n\nIt owns: ${responsibility}`,
         })
         links.push({ from: capabilityHome, to: businessHome, relation: 'serves' })
+        links.push({ from: capabilityHome, to: lineHome, relation: 'belongs-to-line' })
       }
 
       // Homes are idempotent, so a failed setup can be retried safely before the
@@ -281,6 +311,7 @@ export class HomeStore {
         id,
         name,
         mission,
+        lineHome,
         businessHome,
         members: memberHomes,
         capabilityHomes,
@@ -332,7 +363,8 @@ export class HomeStore {
 
   findAssetByProposalId(address: string, proposalId: string): StoredAsset | undefined {
     const cache = this.requireHome(parseHomeAddress(address))
-    const found = [...cache.assets.values()].find(asset => asset.proposalId === proposalId)
+    const found = [...cache.assets.values()].find(asset => asset.proposalId === proposalId
+      || asset.proposalApplications?.some(application => application.proposalId === proposalId))
     return found === undefined ? undefined : structuredClone(found)
   }
 
@@ -341,14 +373,18 @@ export class HomeStore {
       const cache = this.requireHome(input.ownerAddress)
       const existing = cache.assets.get(input.id)
       if (existing !== undefined) {
-        if (existing.proposalId === input.proposalId
-          || (existing.description === input.description && existing.body === normalizeBody(input.body))) {
+        if ((input.proposalId !== undefined && existing.proposalId === input.proposalId)
+          || (existing.kind === input.kind
+            && existing.description === input.description.trim()
+            && existing.body === normalizeBody(input.body)
+            && JSON.stringify(existing.tags) === JSON.stringify(normalizeTags(input.tags ?? [])))) {
           return structuredClone(existing)
         }
         throw new Error(`asset id collision in ${input.ownerAddress}: ${input.id}`)
       }
 
       const now = nowIso()
+      const body = normalizeBody(input.body)
       const metadata = AssetMetadataSchema.parse({
         schemaVersion: 1,
         id: input.id,
@@ -363,10 +399,11 @@ export class HomeStore {
         status: input.status ?? 'active',
         revision: 1,
         ...(input.proposalId !== undefined ? { proposalId: input.proposalId } : {}),
+        ...(input.proposalId !== undefined ? { proposalApplications: [{ proposalId: input.proposalId,
+          revision: 1, bodySha256: createHash('sha256').update(body).digest('hex') }] } : {}),
         createdAt: now,
         updatedAt: now,
       }) as AssetMetadata
-      const body = normalizeBody(input.body)
       const bodyPath = this.assetPath(cache, input.kind, metadata.id)
       const stored: StoredAsset = { ...metadata, body, bodyPath }
       await atomicWrite(bodyPath, renderAsset(stored))
@@ -381,6 +418,17 @@ export class HomeStore {
       const cache = this.requireHome(parseHomeAddress(address))
       const current = cache.assets.get(id)
       if (current === undefined) throw new Error(`asset not found in ${address}: ${id}`)
+      if (input.expectedRevision !== undefined
+        && (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 1
+          || current.revision !== input.expectedRevision)) {
+        throw new Error(`asset revision conflict in ${address}: ${id}; expected ${input.expectedRevision}, current ${current.revision}. Read the asset again before updating it.`)
+      }
+      if (input.appliedProposalId !== undefined && (!input.appliedProposalId.trim()
+        || current.proposalId === input.appliedProposalId
+        || current.proposalApplications?.some(item => item.proposalId === input.appliedProposalId))) {
+        throw new Error(`asset proposal application already exists or is invalid: ${input.appliedProposalId}`)
+      }
+      const body = input.body === undefined ? current.body : normalizeBody(input.body)
       const updatedAt = nowIso()
       const metadata = AssetMetadataSchema.parse({
         ...stripStoredFields(current),
@@ -390,10 +438,14 @@ export class HomeStore {
         ...(input.status !== undefined ? { status: input.status } : {}),
         ...(input.confidence !== undefined ? { confidence: input.confidence } : {}),
         ...(input.fitness !== undefined ? { fitness: input.fitness } : {}),
+        ...(input.appliedProposalId === undefined ? {} : { proposalApplications: [
+          ...(current.proposalApplications ?? []), { proposalId: input.appliedProposalId,
+            revision: current.revision + 1,
+            bodySha256: createHash('sha256').update(body).digest('hex') },
+        ] }),
         revision: current.revision + 1,
         updatedAt,
       }) as AssetMetadata
-      const body = input.body === undefined ? current.body : normalizeBody(input.body)
       const stored: StoredAsset = { ...metadata, body, bodyPath: current.bodyPath }
       await atomicWrite(current.bodyPath, renderAsset(stored))
       cache.assets.set(id, stored)
@@ -403,6 +455,14 @@ export class HomeStore {
   }
 
   contextFor(address: string, budget: ContextBudget, episodeCount = 0): string {
+    return this.renderContext(address, budget, episodeCount, false)
+  }
+
+  contextForFrame(address: string, budget: ContextBudget): string {
+    return this.renderContext(address, budget, 0, true)
+  }
+
+  private renderContext(address: string, budget: ContextBudget, episodeCount: number, frame: boolean): string {
     const cache = this.requireHome(parseHomeAddress(address))
     const identity = truncateUtf8(cache.identity, budget.identityMaxBytes)
     const activeAssets = [...cache.assets.values()]
@@ -412,13 +472,13 @@ export class HomeStore {
     const { included, omitted } = takeWithinBudget(rows, budget.indexMaxBytes)
     const index = included.length === 0 ? '- (no active long-term assets)' : included.join('\n')
     return [
-      '# BizAgent Home Context',
+      frame ? '# BizAgent Read-only Agent Frame' : '# BizAgent Home Context',
       '',
       `Home: ${cache.home.address}`,
       `Type: ${cache.home.type}`,
       `Revision: ${cache.home.revision}`,
       `Digest: ${cache.home.contextDigest}`,
-      `Known DSH episodes: ${episodeCount}`,
+      ...(!frame ? [`Known DSH episodes: ${episodeCount}`] : []),
       '',
       '## Identity',
       '',
@@ -429,8 +489,11 @@ export class HomeStore {
       index,
       ...(omitted > 0 ? ['', `(${omitted} additional active assets omitted by the context budget.)`] : []),
       '',
-      'Use bizagent_memory_search and bizagent_memory_read before relying on an indexed asset. '
-        + 'Write reusable learning to this Home only. For another Home, create a proposal instead of writing it directly.',
+      frame
+        ? 'This is attributed read-only context from another Home. Use bizagent_frame_search and bizagent_frame_read for exact content. '
+          + 'It does not change the current Session owner or tool authority. Send reusable learning to this Home through a proposal.'
+        : 'Use bizagent_episodes to find earlier DSH Sessions; use bizagent_memory_search and bizagent_memory_read before relying on an indexed asset. '
+          + 'Write reusable learning to this Home only. For another Home, create a proposal instead of writing it directly.',
     ].join('\n')
   }
 
@@ -500,6 +563,7 @@ export class HomeStore {
     }
     const organization = OrganizationSchema.parse(raw) as Organization
     const referenced = new Set<HomeAddress>([
+      ...(organization.lineHome === undefined ? [] : [organization.lineHome]),
       organization.businessHome,
       ...organization.members.flatMap(member => [member.personalHome, member.roleHome]),
       ...organization.capabilityHomes,
