@@ -199,7 +199,10 @@ async function startSmokeModel() {
       if (marker === 'SMOKE_CREATE_PROJECT' || marker?.endsWith('_PRINCIPAL')) {
         assert.match(messages, /unique long-term Principal/)
         assert.doesNotMatch(messages, /dedicated Project Main/)
-        assert.doesNotMatch(messages, /EXECUTION_ONLY_CLAUDE_SENTINEL/)
+      }
+      if (marker === 'SMOKE_CREATE_PROJECT') {
+        // Principal Sessions join the DSH agent preset, which loads the Home's AGENTS.md.
+        assert.match(messages, /HOME_AGENTS_SENTINEL/)
       }
       if (marker?.startsWith('SMOKE_READ_MAIN')) {
         assert.match(messages, new RegExp(`dedicated Project Main for project:${humanProjectId}`))
@@ -301,8 +304,8 @@ try {
     for (const address of ['line:smoke', 'business:smoke', 'role:smoke', 'capability:smoke']) {
       await homes.createHome({ address, owner: 'smoke-owner' })
     }
-    await writeFile(join(homes.homeWorkspacePath('personal:default'), 'CLAUDE.md'),
-      'EXECUTION_ONLY_CLAUDE_SENTINEL: project work instructions.\n')
+    await writeFile(join(homes.homeWorkspacePath('personal:default'), 'AGENTS.md'),
+      'HOME_AGENTS_SENTINEL: project work instructions.\n')
   }
   const moduleDirectory = join(root, 'profiles', 'web', 'node_modules', '@bizagent')
   await mkdir(moduleDirectory, { recursive: true })

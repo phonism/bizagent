@@ -69,8 +69,8 @@ export class AgentSessionCoordinator {
       const setup = (agentCtx: Parameters<NonNullable<Parameters<AgentRegistry['create']>[0]['setup']>>[0]) => {
         agentCtx.systemPrompt.section({ name: 'bizagent:agent-session-mode', order: 50,
           text: address.kind === 'principal'
-            ? `This is the unique long-term Principal for ${address.homeAddress}. Keep its conversation continuous. The Home's CLAUDE.md is reference material for execution, not an automatically loaded instruction for this Principal. A Principal turn does not require a worklog.`
-            : `This is the dedicated Project Main for ${address.logicalAddress}, acting as ${address.homeAddress}. Use this execution conversation to coordinate this Project, read its current record before decisions, and keep project work separate from the long-term Principal. The Home's CLAUDE.md is the execution guide when present; record work in the Project and Worklog as appropriate.`,
+            ? `This is the unique long-term Principal for ${address.homeAddress}. Keep its conversation continuous. A Principal turn does not require a worklog.`
+            : `This is the dedicated Project Main for ${address.logicalAddress}, acting as ${address.homeAddress}. Use this execution conversation to coordinate this Project, read its current record before decisions, and keep project work separate from the long-term Principal. The Home's AGENTS.md is the execution guide when present; record work in the Project and Worklog as appropriate.`,
         })
       }
       const handle = record

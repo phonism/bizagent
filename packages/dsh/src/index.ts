@@ -22,6 +22,7 @@ import { LearningSessionRunner } from './learning-session-runner.js'
 import { LearningScheduler } from './learning-scheduler.js'
 import { InboxWakeRunner } from './inbox-wake-runner.js'
 import { InboxReturnNotifier } from './inbox-return-notifier.js'
+import { withAgentPreset } from './agent-preset.js'
 import { interruptProjectSessions } from './project-runtime.js'
 export { createProjectInterventionRuntimeHooks } from './project-runtime.js'
 import { loadActiveOrganizationLocation, type ActiveOrganizationLocation } from './organization-location.js'
@@ -178,18 +179,21 @@ async function applyLocked(ctx: Context, config: ResolvedConfig,
     throw error
   }
 
-  const workRunner = new WorkRunner(ctx.agents, ctx.sessionQuery, service, config,
+  // Every Session this plugin creates or resumes joins a DSH agent preset, so it gets the same
+  // built-in tools as a Session the user opens in DSH.
+  const sessionAgents = withAgentPreset(ctx, ctx.agents, ctx.sessionQuery)
+  const workRunner = new WorkRunner(sessionAgents, ctx.sessionQuery, service, config,
     () => { const { provider, model } = ctx.agentDefaultModel.currentSelection(); return { provider, model } })
-  const agentSessions = new AgentSessionCoordinator(ctx.agents, ctx.sessionQuery, service,
+  const agentSessions = new AgentSessionCoordinator(sessionAgents, ctx.sessionQuery, service,
     () => { const { provider, model } = ctx.agentDefaultModel.currentSelection(); return { provider, model } })
   service.projectMainProvisioner = async projectId => {
     const opened = await agentSessions.openProjectMain(projectId)
     return { sessionId: opened.sessionId }
   }
-  const learningRunner = new LearningSessionRunner(ctx.agents, ctx.sessionQuery, service, config)
+  const learningRunner = new LearningSessionRunner(sessionAgents, ctx.sessionQuery, service, config)
   const learningScheduler = new LearningScheduler(service, learningRunner, config)
-  const inboxWakeRunner = new InboxWakeRunner(ctx.agents, ctx.sessionQuery, service, config)
-  const inboxReturnNotifier = new InboxReturnNotifier(ctx.agents, ctx.sessionQuery, ledger,
+  const inboxWakeRunner = new InboxWakeRunner(sessionAgents, ctx.sessionQuery, service, config)
+  const inboxReturnNotifier = new InboxReturnNotifier(sessionAgents, ctx.sessionQuery, ledger,
     (sessionId, error) => service.recordRuntimeError(`Inbox return ${sessionId}`, error),
     address => service.inboxAddressHome(address, true),
     (address, message) => !service.projectSeatPaused(address)
