@@ -51,10 +51,8 @@ import { INBOX_STALE_ESCALATE_MS, stalledInboxTopics } from './inbox-stalled-top
 import { LearningLedger } from './ledger.js'
 import { evaluateWorkOutput } from './work-output-eval.js'
 import { WorkLedger, type FormalWork } from './work-ledger.js'
-import { ProjectLedger, ProjectWorkflowSchema, projectRoleAssignmentState, projectHumanMessageId,
-  type FormalProject, type ProjectSeat,
-  type ProjectWorkflow } from './project-ledger.js'
-import type { UiProjectNodeReviewInbox, UiProjectOutcomeReviewInbox } from './ui-contract.js'
+import { ProjectLedger, type FormalProject, type ProjectSeat } from './project-ledger.js'
+import type { UiProjectOutcomeReviewInbox } from './ui-contract.js'
 import { projectSeatContext, type ProjectSeatContext } from './project-seat-context.js'
 import { principalSessionId } from './agent-session-address.js'
 import { SharedKnowledgeStore, type SharedKnowledgeTarget,
@@ -70,16 +68,6 @@ import {
 } from './organization-location.js'
 
 type MutableKind = Exclude<AssetKind, 'identity'>
-type WorkflowPlanInput = {
-  projectId: string; expectedProjectRevision: number; expectedWorkflowRevision: number
-  reason: string; idempotencyKey: string; proposalKey?: string | undefined
-  workflow: { summary: string; steps: Array<{
-    id: string; title: string; intent: string; executor: string
-    acceptanceCriteria: string
-    after?: string[] | undefined; reviewer?: string | undefined; reviewCriteria?: string | undefined
-  }> }
-}
-type WorkflowRebuildInput = WorkflowPlanInput & { restartNodeIds?: string[] | undefined }
 interface TurnEvidence {
   userText: string
   assistantText: string
@@ -149,7 +137,6 @@ export class BizAgentService {
     description: string; path: string }> = []
   private worklogRecoveryOffset = 0
   private sessionWorklogRecoveryOffset = 0
-  private projectHumanRecoveryOffset = 0
 
   constructor(
     store: HomeStore,
@@ -1160,57 +1147,20 @@ export class BizAgentService {
     return project === undefined || seat === undefined ? undefined : projectSeatContext(project, seat)
   }
 
-  projectExecutionPaused(projectId: string): boolean {
-    return this.projectLedger?.get(projectId)?.intervention?.paused === true
-  }
-
-  projectLeadWakeBlocked(message: InboxMessage, recipient: string): boolean {
-    if (message.projectId === undefined) return false
-    const project = this.projectLedger?.get(message.projectId)
-    if (project?.status !== 'blocked' || project.lead !== recipient) return false
-    return !this.projectHumanAnswerMessage(message, recipient)
-  }
-
-  projectHumanAnswerMessage(message: InboxMessage, recipient: string): boolean {
-    if (message.projectId === undefined) return false
-    const project = this.projectLedger?.get(message.projectId)
-    if (project?.status !== 'blocked' || project.lead !== recipient) return false
-    const waiting = project.humanHandoffs?.at(-1)
-    return waiting !== undefined && waiting.resolution === undefined
-      && message.replyTo === waiting.messageId
-      && (message.fromAddress === waiting.recipient
-        || message.fromAddress === waiting.fallbackRecipient)
-  }
-
-  projectSeatPaused(address: string): boolean {
-    return isProjectSeatAddress(address)
-      && this.projectExecutionPaused(address.slice('seat:'.length, address.lastIndexOf(':')))
-  }
-
   async joinProjectTurn(agent: Agent, projectId: string): Promise<Record<string, unknown>> {
     const binding = await this.requireDurableBinding(agent)
     return this.requireProjectLedger().withWrite(async () => {
       const project = this.requireProjectLedger().get(projectId)
-      if (project === undefined || project.status !== 'open' || project.intervention?.paused) {
-        throw new Error('Project turn requires an unpaused open Project')
+      if (project === undefined || project.status !== 'open') {
+        throw new Error('Project turn requires an open Project')
       }
       const linkedWork = this.workLedger?.list().some(work => work.projectId === projectId
         && (work.assignee === binding.homeAddress || work.requester === binding.homeAddress)) ?? false
-      const workflowRole = project.workflow?.steps.some(step => {
-        const change = project.progressionChanges?.at(-1)
-        const reviewerHome = change?.mode === 'automatic' ? undefined
-          : change?.mode === 'reviewed'
-            ? change.reviewers.find(item => item.nodeId === step.id)?.reviewerHome ?? step.reviewer
-            : step.reviewer
-        return step.executor === binding.homeAddress
-          || reviewerHome === binding.homeAddress
-      }) ?? false
-      if (!projectVisibleToHome(project, binding.homeAddress) && !linkedWork && !workflowRole) {
+      if (!projectVisibleToHome(project, binding.homeAddress) && !linkedWork) {
         throw new Error('current Home is not a Project participant')
       }
       const participation = await this.recordProjectTurn(agent, binding, projectId)
-      return { participation, projectRevision: project.revision,
-        executionEpoch: project.intervention?.epoch ?? 0 }
+      return { participation, projectRevision: project.revision }
     })
   }
 
@@ -1754,14 +1704,6 @@ export class BizAgentService {
 
   async createProject(agent: Agent, input: {
     title: string; goal: string; doneWhen: string; idempotencyKey: string
-    workflow?: {
-      summary: string
-      steps: Array<{
-        id: string; title: string; intent: string; executor: string
-        acceptanceCriteria: string
-        after?: string[]; reviewer?: string; reviewCriteria?: string
-      }>
-    }
   }): Promise<Record<string, unknown>> {
     const ledger = this.requireProjectLedger()
     const binding = await this.requireDurableBinding(agent)
@@ -1775,38 +1717,12 @@ export class BizAgentService {
     if (!idempotencyKey || idempotencyKey.length > 128) {
       throw new Error('Project idempotency key must contain 1 to 128 characters')
     }
-    const workflow: ProjectWorkflow | undefined = input.workflow === undefined ? undefined
-      : ProjectWorkflowSchema.parse({
-        revision: 1, summary: input.workflow.summary.trim(), frozenAt: nowIso(),
-        steps: input.workflow.steps.map(step => ({
-          id: step.id.trim(), title: step.title.trim(), intent: step.intent.trim(),
-          executor: parseHomeAddress(step.executor.trim()),
-          acceptanceCriteria: step.acceptanceCriteria.trim(),
-          after: (step.after ?? []).map(id => id.trim()),
-          ...(step.reviewer !== undefined ? { reviewer: parseHomeAddress(step.reviewer.trim()) } : {}),
-          ...(step.reviewCriteria !== undefined ? { reviewCriteria: step.reviewCriteria.trim() } : {}),
-        })),
-      })
-    for (const step of workflow?.steps ?? []) {
-      if (this.store.getHome(step.executor).status !== 'active') {
-        throw new Error(`Workflow executor Home is not active: ${step.executor}`)
-      }
-      if (step.reviewer !== undefined && this.store.getHome(step.reviewer).status !== 'active') {
-        throw new Error(`Workflow reviewer Home is not active: ${step.reviewer}`)
-      }
-    }
     const id = stableId('project', `${binding.homeAddress}:${idempotencyKey}`)
     const result = await ledger.withWrite(async () => {
       const existing = ledger.get(id)
       if (existing !== undefined) {
-        const initialWorkflow = existing.workflowAmendments?.[0]?.before ?? existing.workflow
         if (existing.lead !== binding.homeAddress || existing.title !== title
-          || existing.goal !== goal || existing.doneWhen !== doneWhen
-          || JSON.stringify(initialWorkflow === undefined ? null : {
-            summary: initialWorkflow.summary, steps: initialWorkflow.steps,
-          }) !== JSON.stringify(workflow === undefined ? null : {
-            summary: workflow.summary, steps: workflow.steps,
-          })) {
+          || existing.goal !== goal || existing.doneWhen !== doneWhen) {
           throw new Error('Project idempotency key conflicts with an existing project')
         }
         return { project: existing, idempotentReplay: true }
@@ -1816,8 +1732,7 @@ export class BizAgentService {
         schemaVersion: 1, id, idempotencyKey, lead: binding.homeAddress,
         driver: `project:${id}`,
         createdBySessionId: String(agent.id), title, goal, doneWhen,
-        ...(workflow !== undefined ? { workflow } : {}),
-        status: 'open', revision: 1, claims: [], reviews: [], nodeReviews: [],
+        status: 'open', revision: 1, claims: [], reviews: [],
         createdAt: now, updatedAt: now,
       }
       await ledger.put(project)
@@ -1833,649 +1748,15 @@ export class BizAgentService {
     }
   }
 
-  async amendProjectWorkflow(agent: Agent, input: WorkflowPlanInput): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    return this.decideWorkflowAmend(input, { bySessionId: String(agent.id) },
-      project => project.lead === binding.homeAddress,
-      'only the lead Home may amend an open Workflow Project')
-  }
-
-  async proposeProjectWorkflow(agent: Agent, input: WorkflowPlanInput): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    const ledger = this.requireProjectLedger()
-    const reason = input.reason.trim()
-    const idempotencyKey = input.idempotencyKey.trim()
-    if (!reason || reason.length > 4000) throw new Error('Workflow proposal reason must contain 1 to 4000 characters')
-    if (!idempotencyKey || idempotencyKey.length > 128) {
-      throw new Error('Workflow proposal idempotency key must contain 1 to 128 characters')
-    }
-    const draft = ProjectWorkflowSchema.parse({
-      revision: 1, summary: input.workflow.summary.trim(), frozenAt: nowIso(),
-      steps: input.workflow.steps.map(step => ({
-        id: step.id.trim(), title: step.title.trim(), intent: step.intent.trim(),
-        executor: parseHomeAddress(step.executor.trim()),
-        acceptanceCriteria: step.acceptanceCriteria.trim(),
-        after: (step.after ?? []).map(id => id.trim()),
-        ...(step.reviewer !== undefined ? { reviewer: parseHomeAddress(step.reviewer.trim()) } : {}),
-        ...(step.reviewCriteria !== undefined ? { reviewCriteria: step.reviewCriteria.trim() } : {}),
-      })),
-    })
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || project.status !== 'open' || project.workflow === undefined
-        || project.lead !== binding.homeAddress) {
-        throw new Error('only the lead Home may propose an open Workflow Project plan')
-      }
-      const existing = project.workflowProposals?.find(item => item.idempotencyKey === idempotencyKey)
-      if (existing !== undefined) {
-        if (existing.reason !== reason || existing.workflow.summary !== draft.summary
-          || JSON.stringify(existing.workflow.steps) !== JSON.stringify(draft.steps)) {
-          throw new Error('Workflow proposal idempotency key conflicts with an existing proposal')
-        }
-        return { project, proposal: existing, idempotentReplay: true }
-      }
-      if (project.revision !== input.expectedProjectRevision
-        || project.workflow.revision !== input.expectedWorkflowRevision) {
-        throw new Error('Project or Workflow revision changed; read the current Project before proposing')
-      }
-      if (project.workflow.summary === draft.summary
-        && JSON.stringify(project.workflow.steps) === JSON.stringify(draft.steps)) {
-        throw new Error('Workflow proposal has no plan changes')
-      }
-      const at = nowIso()
-      const proposal = {
-        idempotencyKey, reason,
-        workflow: ProjectWorkflowSchema.parse({ ...draft,
-          revision: project.workflow.revision + 1, frozenAt: at }),
-        baseWorkflowRevision: project.workflow.revision,
-        executionEpoch: project.intervention?.epoch ?? 0,
-        bySessionId: String(agent.id), at,
-      }
-      const next: FormalProject = { ...project,
-        workflowProposals: [...(project.workflowProposals ?? []), proposal],
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, proposal }
-    })
-  }
-
-  async setProjectProgressionAsHuman(principal: string, input: {
-    projectId: string; expectedRevision: number; mode: 'automatic' | 'reviewed'
-    reviewers: Array<{ nodeId: string; reviewerHome: string }>; reason: string
-  }, authorize: (principal: string, project: FormalProject) => boolean | Promise<boolean>,
-  authorizeReviewerHome: (principal: string, project: FormalProject,
-    reviewerHome: string, nodeId: string) => boolean | Promise<boolean>):
-    Promise<Record<string, unknown>> {
-    if (!principal.trim() || principal.length > 200) throw new Error('Project progression principal is invalid')
-    const reason = input.reason.trim()
-    if (!reason || reason.length > 4000) throw new Error('Project progression reason must contain 1 to 4000 characters')
-    const ledger = this.requireProjectLedger()
-    const result = await ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || project.status !== 'open' || !project.workflow
-        || !await authorize(principal, project)) {
-        throw new Error('Project progression is not authorized for the current Project')
-      }
-      if (project.revision !== input.expectedRevision) {
-        throw new Error('Project progression revision conflict')
-      }
-      const reviewers = input.reviewers.map(item => ({
-        nodeId: item.nodeId.trim(), reviewerHome: parseHomeAddress(item.reviewerHome.trim()),
-      })).sort((a, b) => a.nodeId.localeCompare(b.nodeId))
-      const stepIds = new Set(project.workflow.steps.map(step => step.id))
-      const requiredIds = projectWorkflowState(project, this.requireWorkLedger().list()
-        .filter(item => item.projectId === project.id)).nodes
-        .filter(node => node.status !== 'done').map(node => node.id)
-      if (input.mode === 'automatic' && reviewers.length > 0
-        || input.mode === 'reviewed' && (new Set(reviewers.map(item => item.nodeId)).size !== reviewers.length
-          || reviewers.some(item => !stepIds.has(item.nodeId))
-          || requiredIds.some(id => !reviewers.some(item => item.nodeId === id)))) {
-        throw new Error('Project progression reviewers must cover every unfinished Workflow node in reviewed mode')
-      }
-      for (const item of reviewers) {
-        if (this.store.getHome(item.reviewerHome).status !== 'active'
-          || !await authorizeReviewerHome(principal, project, item.reviewerHome, item.nodeId)) {
-          throw new Error(`Workflow reviewer Home is not authorized: ${item.reviewerHome}`)
-        }
-      }
-      const previous = project.progressionChanges?.at(-1)
-      if (previous?.mode === input.mode && JSON.stringify(previous.reviewers) === JSON.stringify(reviewers)) {
-        throw new Error('Project progression has no changes')
-      }
-      const at = nowIso()
-      const change = { revision: (project.progressionChanges?.length ?? 0) + 1,
-        mode: input.mode, reviewers, reason, byPrincipal: principal, at }
-      const next: FormalProject = { ...project,
-        progressionChanges: [...(project.progressionChanges ?? []), change],
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, progression: change }
-    })
-    const notification = await this.deliverProjectProgressionNotice(result.project, result.progression)
-      .catch(error => {
-        this.recordRuntimeError(`Project progression notice ${result.project.id}/${result.progression.revision}`, error)
-        return 'pending' as const
-      })
-    return { ...result, notification }
-  }
-
-  /** The Project event is the outbox source; a stable Inbox ID makes recovery safe after a partial write. */
-  async reconcileProjectProgressionNotifications(limit = 20): Promise<{
-    delivered: string[]; failed: Array<{ projectId: string; revision: number; error: unknown }>
-  }> {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid progression notice limit')
-    const delivered: string[] = []
-    const failed: Array<{ projectId: string; revision: number; error: unknown }> = []
-    for (const project of this.requireProjectLedger().list()) {
-      if (project.status !== 'open') continue
-      for (const change of (project.progressionChanges ?? []).slice(-1)) {
-        if (delivered.length + failed.length >= limit) return { delivered, failed }
-        const id = stableId('project-progression', `${project.id}:${change.revision}`)
-        if (this.ledger.getInboxMessage(id) && this.ledger.getInboxDelivery(id, project.lead)) continue
-        try {
-          await this.deliverProjectProgressionNotice(project, change)
-          delivered.push(id)
-        } catch (error) { failed.push({ projectId: project.id, revision: change.revision, error }) }
-      }
-    }
-    return { delivered, failed }
-  }
-
-  private async deliverProjectProgressionNotice(project: FormalProject,
-    change: NonNullable<FormalProject['progressionChanges']>[number]): Promise<'delivered'> {
-    const id = stableId('project-progression', `${project.id}:${change.revision}`)
-    await this.ledger.withInboxWrite(async () => {
-      const existing = this.ledger.getInboxMessage(id)
-      if (existing !== undefined && (existing.projectProgression?.projectId !== project.id
-        || existing.projectProgression.revision !== change.revision
-        || existing.projectProgression.lead !== project.lead)) {
-        throw new Error('Project progression notice ID belongs to another event')
-      }
-      if (existing === undefined) {
-        const body = [
-          'The Project manager confirmed a new progression policy.',
-          `Project: ${project.id}`,
-          `Progression revision: ${change.revision}`,
-          `Mode: ${change.mode}`,
-          `Reason: ${change.reason}`,
-          ...(change.mode === 'reviewed' ? [
-            `Reviewers: ${change.reviewers.map(item => `${item.nodeId}=${item.reviewerHome}`).join(', ')}`,
-          ] : []),
-          'Read the current Project and Workflow before dispatching more nodes. Pending Work keeps its reserved review gate.',
-        ].join('\n')
-        const message: InboxMessage = {
-          schemaVersion: 1, id, idempotencyKey: `project-progression:${project.id}:${change.revision}`,
-          fromAddress: 'engine:inbox', to: [project.lead], cc: [], projectId: project.id,
-          projectProgression: { projectId: project.id, revision: change.revision, lead: project.lead },
-          subject: `Project progression confirmed: ${project.title}`.slice(0, 200), body,
-          kind: 'project-progression', priority: 'urgent', contextRefs: [], rootId: id,
-          chain: 0, topicId: id, hop: 0, sentAt: change.at,
-        }
-        await this.ledger.putInboxMessage(message)
-      }
-      if (this.ledger.getInboxDelivery(id, project.lead) === undefined) {
-        await this.ledger.putInboxDelivery({ schemaVersion: 1, messageId: id,
-          recipient: project.lead, status: 'delivered', wakePolicy: 'immediate',
-          wakeAt: change.at, updatedAt: nowIso() })
-      }
-    })
-    return 'delivered'
-  }
-
-  async amendProjectWorkflowAsHuman(principal: string, input: WorkflowPlanInput,
-    authorize: (principal: string, project: FormalProject) => boolean | Promise<boolean>):
-    Promise<Record<string, unknown>> {
-    if (!principal.trim() || principal.length > 200) throw new Error('Workflow amendment principal is invalid')
-    return this.decideWorkflowAmend(input, { byPrincipal: principal },
-      project => authorize(principal, project))
-  }
-
-  private async decideWorkflowAmend(input: WorkflowPlanInput,
-    actor: { bySessionId: string } | { byPrincipal: string },
-    authorize: (project: FormalProject) => boolean | Promise<boolean>,
-    denialMessage = 'Workflow amendment is not authorized for the current Project'):
-    Promise<Record<string, unknown>> {
-    const ledger = this.requireProjectLedger()
-    const reason = input.reason.trim()
-    const idempotencyKey = input.idempotencyKey.trim()
-    if (!reason || reason.length > 4000) throw new Error('Workflow amendment reason must contain 1 to 4000 characters')
-    if (!idempotencyKey || idempotencyKey.length > 128) {
-      throw new Error('Workflow amendment idempotency key must contain 1 to 128 characters')
-    }
-    const draft = ProjectWorkflowSchema.parse({
-      revision: 1, summary: input.workflow.summary.trim(), frozenAt: nowIso(),
-      steps: input.workflow.steps.map(step => ({
-        id: step.id.trim(), title: step.title.trim(), intent: step.intent.trim(),
-        executor: parseHomeAddress(step.executor.trim()),
-        acceptanceCriteria: step.acceptanceCriteria.trim(),
-        after: (step.after ?? []).map(id => id.trim()),
-        ...(step.reviewer !== undefined ? { reviewer: parseHomeAddress(step.reviewer.trim()) } : {}),
-        ...(step.reviewCriteria !== undefined ? { reviewCriteria: step.reviewCriteria.trim() } : {}),
-      })),
-    })
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || project.status !== 'open'
-        || project.workflow === undefined || project.intervention?.paused
-        || !await authorize(project)) {
-        throw new Error(denialMessage)
-      }
-      const prior = project.workflow
-      const existing = project.workflowAmendments?.find(item => item.idempotencyKey === idempotencyKey)
-      if (existing !== undefined) {
-        if (existing.mode === 'rebuild' || existing.reason !== reason
-          || existing.proposalKey !== input.proposalKey || existing.after.summary !== draft.summary
-          || JSON.stringify(existing.after.steps) !== JSON.stringify(draft.steps)) {
-          throw new Error('Workflow amendment idempotency key conflicts with an existing revision')
-        }
-        return { project, amendment: existing, idempotentReplay: true }
-      }
-      if (project.revision !== input.expectedProjectRevision
-        || prior.revision !== input.expectedWorkflowRevision) {
-        throw new Error('Project or Workflow revision changed; read the current Project before amending')
-      }
-      this.assertCurrentWorkflowProposal(project, input.proposalKey)
-      if (prior.summary === draft.summary && JSON.stringify(prior.steps) === JSON.stringify(draft.steps)) {
-        throw new Error('Workflow amendment has no plan changes')
-      }
-      const proposedById = new Map(draft.steps.map(step => [step.id, step]))
-      const removed = prior.steps.filter(step => !proposedById.has(step.id))
-      if (removed.length > 0) {
-        throw new Error(`Workflow amendment cannot remove nodes without a paused execution rebuild: ${removed.map(step => step.id).join(', ')}`)
-      }
-      const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-      const doneIds = new Set(projectWorkflowState(project, work).nodes
-        .filter(node => node.status === 'done').map(node => node.id))
-      for (const step of prior.steps) {
-        if (work.some(item => item.workflowNodeId === step.id)
-          && JSON.stringify(step) !== JSON.stringify(proposedById.get(step.id))) {
-          throw new Error(`Workflow node ${step.id} has dispatched Work and cannot be changed in place`)
-        }
-      }
-      for (const step of draft.steps) {
-        if (!doneIds.has(step.id)) currentWorkflowReview(project, step)
-        if (this.store.getHome(step.executor).status !== 'active') {
-          throw new Error(`Workflow executor Home is not active: ${step.executor}`)
-        }
-        if (step.reviewer !== undefined && this.store.getHome(step.reviewer).status !== 'active') {
-          throw new Error(`Workflow reviewer Home is not active: ${step.reviewer}`)
-        }
-      }
-      const now = nowIso()
-      const workflow: ProjectWorkflow = ProjectWorkflowSchema.parse({
-        ...draft, revision: prior.revision + 1, frozenAt: now,
-      })
-      const amendment = { idempotencyKey, reason, before: prior, after: workflow,
-        ...(input.proposalKey === undefined ? {} : { proposalKey: input.proposalKey }),
-        ...actor, at: now }
-      const next: FormalProject = {
-        ...project, workflow, workflowAmendments: [...(project.workflowAmendments ?? []), amendment],
-        revision: project.revision + 1, updatedAt: now,
-      }
-      await ledger.put(next)
-      return { project: next, amendment }
-    })
-  }
-
-  async rebuildProjectWorkflow(agent: Agent, input: WorkflowRebuildInput,
-    inspect: () => Promise<{ status: 'quiet' | 'busy' | 'unknown'; sessionIds: string[] }>):
-    Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    return this.decideWorkflowRebuild(input, { bySessionId: String(agent.id) },
-      project => project.lead === binding.homeAddress, inspect,
-      'only the lead Home may rebuild a paused open Workflow Project')
-  }
-
-  async rebuildProjectWorkflowAsHuman(principal: string, input: WorkflowRebuildInput,
-    authorize: (principal: string, project: FormalProject) => boolean | Promise<boolean>,
-    inspect: () => Promise<{ status: 'quiet' | 'busy' | 'unknown'; sessionIds: string[] }>):
-    Promise<Record<string, unknown>> {
-    if (!principal.trim() || principal.length > 200) throw new Error('Workflow rebuild principal is invalid')
-    return this.decideWorkflowRebuild(input, { byPrincipal: principal },
-      project => authorize(principal, project), inspect)
-  }
-
-  private async decideWorkflowRebuild(input: WorkflowRebuildInput,
-    actor: { bySessionId: string } | { byPrincipal: string },
-    authorize: (project: FormalProject) => boolean | Promise<boolean>,
-    inspect: () => Promise<{ status: 'quiet' | 'busy' | 'unknown'; sessionIds: string[] }>,
-    denialMessage = 'Workflow rebuild is not authorized for the current Project'):
-    Promise<Record<string, unknown>> {
-    const ledger = this.requireProjectLedger()
-    const reason = input.reason.trim()
-    const idempotencyKey = input.idempotencyKey.trim()
-    const restartNodeIds = (input.restartNodeIds ?? []).map(id => id.trim()).sort()
-    if (!reason || reason.length > 4000) throw new Error('Workflow rebuild reason must contain 1 to 4000 characters')
-    if (!idempotencyKey || idempotencyKey.length > 128) {
-      throw new Error('Workflow rebuild idempotency key must contain 1 to 128 characters')
-    }
-    if (new Set(restartNodeIds).size !== restartNodeIds.length) {
-      throw new Error('Workflow restart nodes must be distinct')
-    }
-    const draft = ProjectWorkflowSchema.parse({
-      revision: 1, summary: input.workflow.summary.trim(), frozenAt: nowIso(),
-      steps: input.workflow.steps.map(step => ({
-        id: step.id.trim(), title: step.title.trim(), intent: step.intent.trim(),
-        executor: parseHomeAddress(step.executor.trim()),
-        acceptanceCriteria: step.acceptanceCriteria.trim(),
-        after: (step.after ?? []).map(id => id.trim()),
-        ...(step.reviewer !== undefined ? { reviewer: parseHomeAddress(step.reviewer.trim()) } : {}),
-        ...(step.reviewCriteria !== undefined ? { reviewCriteria: step.reviewCriteria.trim() } : {}),
-      })),
-    })
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || project.status !== 'open'
-        || project.workflow === undefined || !project.intervention?.paused
-        || !await authorize(project)) {
-        throw new Error(denialMessage)
-      }
-      const prior = project.workflow
-      const existing = project.workflowAmendments?.find(item => item.idempotencyKey === idempotencyKey)
-      if (existing !== undefined) {
-        if (existing.mode !== 'rebuild' || existing.reason !== reason
-          || existing.proposalKey !== input.proposalKey
-          || existing.after.summary !== draft.summary
-          || JSON.stringify(existing.after.steps) !== JSON.stringify(draft.steps)
-          || JSON.stringify(existing.restartNodeIds) !== JSON.stringify(restartNodeIds)) {
-          throw new Error('Workflow rebuild idempotency key conflicts with an existing revision')
-        }
-        return { project, amendment: existing, idempotentReplay: true }
-      }
-      if (project.revision !== input.expectedProjectRevision
-        || prior.revision !== input.expectedWorkflowRevision) {
-        throw new Error('Project or Workflow revision changed; read the current Project before rebuilding')
-      }
-      this.assertCurrentWorkflowProposal(project, input.proposalKey)
-      if (prior.summary === draft.summary && JSON.stringify(prior.steps) === JSON.stringify(draft.steps)
-        && restartNodeIds.length === 0) {
-        throw new Error('Workflow rebuild has no plan or restart changes')
-      }
-      for (const step of draft.steps) {
-        if (this.store.getHome(step.executor).status !== 'active') {
-          throw new Error(`Workflow executor Home is not active: ${step.executor}`)
-        }
-        if (step.reviewer !== undefined && this.store.getHome(step.reviewer).status !== 'active') {
-          throw new Error(`Workflow reviewer Home is not active: ${step.reviewer}`)
-        }
-      }
-      const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-      const runtime = await this.assertProjectQuiet(project, work, inspect)
-      const state = projectWorkflowState(project, work)
-      const retainedIds = retainedProjectNodeIds(prior.steps, draft.steps, restartNodeIds,
-        new Set(state.nodes.filter(node => node.status === 'done').map(node => node.id)))
-      for (const step of draft.steps) {
-        if (!retainedIds.has(step.id)) currentWorkflowReview(project, step)
-      }
-      const activeWork = currentWorkflowWork(project, work)
-      const retained: Array<{ nodeId: string; workId: string }> = []
-      for (const step of draft.steps) {
-        if (!retainedIds.has(step.id)) continue
-        const latest = activeWork.filter(item => item.workflowNodeId === step.id)
-          .sort((a, b) => (b.workflowAttempt ?? 0) - (a.workflowAttempt ?? 0))[0]
-        if (latest?.status !== 'completed') throw new Error(`retained Workflow node has no completed Work: ${step.id}`)
-        await this.verifyWorkArtifacts(latest, true)
-        retained.push({ nodeId: step.id, workId: latest.id })
-      }
-      const at = nowIso()
-      const workflow: ProjectWorkflow = ProjectWorkflowSchema.parse({
-        ...draft, revision: prior.revision + 1, frozenAt: at,
-      })
-      const amendment = { idempotencyKey, reason, before: prior, after: workflow,
-        ...(input.proposalKey === undefined ? {} : { proposalKey: input.proposalKey }),
-        mode: 'rebuild' as const, executionEpoch: project.intervention.epoch + 1,
-        retained, restartNodeIds, ...actor, at }
-      const next: FormalProject = {
-        ...project, workflow, workflowAmendments: [...(project.workflowAmendments ?? []), amendment],
-        revision: project.revision + 1, updatedAt: at,
-      }
-      await ledger.put(next)
-      return { project: next, amendment, runtime }
-    })
-  }
-
-  private assertCurrentWorkflowProposal(project: FormalProject, proposalKey: string | undefined): void {
-    if (proposalKey === undefined) return
-    const proposal = project.workflowProposals?.at(-1)
-    if (proposal?.idempotencyKey !== proposalKey
-      || proposal.baseWorkflowRevision !== project.workflow?.revision
-      || proposal.executionEpoch !== (project.intervention?.epoch ?? 0)) {
-      throw new Error('Workflow proposal changed; read the current Project before applying it')
-    }
-  }
-
-  async pauseProject(agent: Agent, input: {
-    projectId: string; expectedProjectRevision: number; reason: string
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    return this.decideProjectPause(input, { bySessionId: String(agent.id) },
-      project => project.lead === binding.homeAddress,
-      'only the lead Home may pause an open Project')
-  }
-
-  async pauseProjectAsHuman(principal: string, input: {
-    projectId: string; expectedProjectRevision: number; reason: string
-  }, authorize: (principal: string, project: FormalProject) => boolean | Promise<boolean>):
-    Promise<Record<string, unknown>> {
-    if (!principal.trim() || principal.length > 200) throw new Error('Project intervention principal is invalid')
-    return this.decideProjectPause(input, { byPrincipal: principal },
-      project => authorize(principal, project))
-  }
-
-  private async decideProjectPause(input: {
-    projectId: string; expectedProjectRevision: number; reason: string
-  }, actor: { bySessionId: string } | { byPrincipal: string },
-  authorize: (project: FormalProject) => boolean | Promise<boolean>,
-  denialMessage = 'Project intervention is not authorized for the current Project'):
-    Promise<Record<string, unknown>> {
-    const ledger = this.requireProjectLedger()
-    const reason = input.reason.trim()
-    if (!reason || reason.length > 4000) throw new Error('Project pause reason must contain 1 to 4000 characters')
-    if (!Number.isSafeInteger(input.expectedProjectRevision) || input.expectedProjectRevision < 1) {
-      throw new Error('Project pause revision is invalid')
-    }
-    const changed = await ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || !['open', 'blocked'].includes(project.status)
-        || !await authorize(project)) {
-        throw new Error(denialMessage)
-      }
-      if (project.intervention?.paused) {
-        return { project, idempotentReplay: true }
-      }
-      if (project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project revision changed; read the current Project before pausing')
-      }
-      const at = nowIso()
-      const epoch = project.intervention?.epoch ?? 0
-      const next: FormalProject = {
-        ...project, intervention: { epoch, paused: true,
-          history: [...(project.intervention?.history ?? []), {
-            action: 'pause', reason, ...actor, at, epoch,
-          }] },
-        revision: project.revision + 1, updatedAt: at,
-      }
-      await ledger.put(next)
-      return { project: next }
-    })
-    const cleanup = await this.settlePausedProject(changed.project)
-    return { ...changed, ...cleanup }
-  }
-
-  async reconcilePausedProjects(): Promise<{
-    repaired: Array<{ projectId: string; coordinatorSessionId?: string; cancelledWorkIds: string[]
-      notifiedWorkIds: string[]; unsettledWorkIds: string[] }>
-    failed: Array<{ projectId: string; error: unknown }>
-  }> {
-    const repaired: Array<{ projectId: string; coordinatorSessionId?: string; cancelledWorkIds: string[]
-      notifiedWorkIds: string[]; unsettledWorkIds: string[] }> = []
-    const failed: Array<{ projectId: string; error: unknown }> = []
-    for (const candidate of this.requireProjectLedger().list().filter(item => item.intervention?.paused)) {
-      try {
-        const result = await this.requireProjectLedger().withWrite(async () => {
-          const current = this.requireProjectLedger().get(candidate.id)
-          if (!current?.intervention?.paused) return undefined
-          return this.settlePausedProject(current)
-        })
-        if (result !== undefined) {
-          const coordinatorSessionId = candidate.intervention!.history.at(-1)!.bySessionId
-          repaired.push({ projectId: candidate.id,
-            ...(coordinatorSessionId === undefined ? {} : { coordinatorSessionId }),
-            cancelledWorkIds: result.cancelledWorkIds, notifiedWorkIds: result.notifiedWorkIds,
-            unsettledWorkIds: result.unsettledWorkIds })
-          for (const failure of result.notificationFailures) {
-            failed.push({ projectId: candidate.id,
-              error: new Error(`Work ${failure.workId} cancellation notice: ${failure.error}`) })
-          }
-        }
-      } catch (error) { failed.push({ projectId: candidate.id, error }) }
-    }
-    return { repaired, failed }
-  }
-
-  private async settlePausedProject(project: FormalProject): Promise<{
-    cancelledWorkIds: string[]; notifiedWorkIds: string[]
-    notificationFailures: Array<{ workId: string; error: string }>; unsettledWorkIds: string[]
-  }> {
-    const current = this.requireProjectLedger().get(project.id)
-    if (!current?.intervention?.paused) throw new Error('Project is no longer paused')
-    const pause = current.intervention.history.at(-1)
-    if (pause?.action !== 'pause') throw new Error('Project pause history is incomplete')
-    const cancelled = await this.requireWorkLedger().withWrite(async () => {
-      const result: FormalWork[] = []
-      for (const work of this.requireWorkLedger().list().filter(item => item.projectId === project.id
-        && (item.status === 'open' || item.status === 'accepted'))) {
-        const at = nowIso()
-        const next: FormalWork = {
-          ...work, status: 'cancelled',
-          cancelMessageId: stableId('inbox', `${work.requester}:work:${work.id}:cancel`),
-          cancelReason: `Project paused: ${pause.reason}`.slice(0, 2000),
-          cancelledBySessionId: work.returnToSessionId,
-          ...(pause.bySessionId !== undefined
-            ? { cancelledByProjectSessionId: pause.bySessionId }
-            : { cancelledByProjectPrincipal: pause.byPrincipal! }),
-          cancelledAt: at, updatedAt: at,
-        }
-        await this.requireWorkLedger().put(next)
-        result.push(next)
-      }
-      return result
-    })
-    const notificationFailures: Array<{ workId: string; error: string }> = []
-    const notifiedWorkIds: string[] = []
-    for (const work of this.requireWorkLedger().list().filter(item => item.projectId === project.id
-      && item.status === 'cancelled'
-      && (item.cancelledByProjectSessionId !== undefined || item.cancelledByProjectPrincipal !== undefined)
-      && item.cancelMessageId !== undefined
-      && this.workNoticeMissing(item.cancelMessageId, item.assignee))) {
-      try {
-        const sender = this.requireWorkSenderBinding(work.returnToSessionId, work.requester)
-        const notice = await this.sendInboxFromBinding(sender, work.returnToSessionId,
-          `work:${work.id}:cancel`, workCancelNotice(work))
-        this.requireWorkNotification(notice, work.cancelMessageId!, work.returnToSessionId,
-          work.assignee, 'Work cancellation')
-        notifiedWorkIds.push(work.id)
-      } catch (error) {
-        notificationFailures.push({ workId: work.id,
-          error: error instanceof Error ? error.message : String(error) })
-      }
-    }
-    return { cancelledWorkIds: cancelled.map(work => work.id), notifiedWorkIds, notificationFailures,
-      unsettledWorkIds: this.requireWorkLedger().list().filter(work => work.projectId === project.id
-        && !['completed', 'cancelled'].includes(work.status)).map(work => work.id) }
-  }
-
-  async resumeProject(agent: Agent, input: {
-    projectId: string; expectedProjectRevision: number
-  }, inspect: () => Promise<{ status: 'quiet' | 'busy' | 'unknown'; sessionIds: string[] }>): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    return this.decideProjectResume(input, { bySessionId: String(agent.id) },
-      project => project.lead === binding.homeAddress, inspect,
-      'only the lead Home may resume a paused open Project')
-  }
-
-  async resumeProjectAsHuman(principal: string, input: {
-    projectId: string; expectedProjectRevision: number
-  }, authorize: (principal: string, project: FormalProject) => boolean | Promise<boolean>,
-  inspect: () => Promise<{ status: 'quiet' | 'busy' | 'unknown'; sessionIds: string[] }>):
-    Promise<Record<string, unknown>> {
-    if (!principal.trim() || principal.length > 200) throw new Error('Project intervention principal is invalid')
-    return this.decideProjectResume(input, { byPrincipal: principal },
-      project => authorize(principal, project), inspect)
-  }
-
-  private async decideProjectResume(input: {
-    projectId: string; expectedProjectRevision: number
-  }, actor: { bySessionId: string } | { byPrincipal: string },
-  authorize: (project: FormalProject) => boolean | Promise<boolean>,
-  inspect: () => Promise<{ status: 'quiet' | 'busy' | 'unknown'; sessionIds: string[] }>,
-  denialMessage = 'Project intervention is not authorized for the current Project'):
-    Promise<Record<string, unknown>> {
-    const ledger = this.requireProjectLedger()
-    if (!Number.isSafeInteger(input.expectedProjectRevision) || input.expectedProjectRevision < 1) {
-      throw new Error('Project resume revision is invalid')
-    }
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || !['open', 'blocked'].includes(project.status)
-        || !project.intervention?.paused || !await authorize(project)) {
-        throw new Error(denialMessage)
-      }
-      if (project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project revision changed; read the current Project before resuming')
-      }
-      const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-      const runtime = await this.assertProjectQuiet(project, work, inspect)
-      const at = nowIso()
-      const epoch = project.intervention.epoch + 1
-      const next: FormalProject = {
-        ...project, intervention: { epoch, paused: false,
-          history: [...project.intervention.history, {
-            action: 'resume', reason: project.intervention.history.at(-1)!.reason,
-            ...actor, at, epoch,
-          }] },
-        revision: project.revision + 1, updatedAt: at,
-      }
-      await ledger.put(next)
-      return { project: next, runtime }
-    })
-  }
-
-  private async assertProjectQuiet(project: FormalProject, work: FormalWork[],
-    inspect: () => Promise<{ status: 'quiet' | 'busy' | 'unknown'; sessionIds: string[] }>):
-    Promise<{ status: 'quiet' | 'busy' | 'unknown'; sessionIds: string[] }> {
-    const unsettled = work.filter(item => !['completed', 'cancelled'].includes(item.status))
-    if (unsettled.length > 0) {
-      throw new Error(`Project has unsettled formal Work: ${unsettled.map(item => item.id).join(', ')}`)
-    }
-    const unnotified = work.filter(item => item.status === 'cancelled'
-      && (item.cancelledByProjectSessionId !== undefined || item.cancelledByProjectPrincipal !== undefined)
-      && (item.cancelMessageId === undefined
-        || this.ledger.getInboxMessage(item.cancelMessageId)?.kind !== 'work-notice'
-        || !this.ledger.getInboxMessage(item.cancelMessageId)?.to.includes(item.assignee)
-        || this.ledger.getInboxDelivery(item.cancelMessageId, item.assignee)?.status !== 'delivered'))
-    if (unnotified.length > 0) {
-      throw new Error(`Project cancellations are not delivered: ${unnotified.map(item => item.id).join(', ')}`)
-    }
-    if (!project.intervention?.paused) throw new Error('Project execution is not paused')
-    const runtime = await inspect()
-    if (runtime.status !== 'quiet') {
-      throw new Error(`Project execution is ${runtime.status}; keep it paused: ${runtime.sessionIds.join(', ')}`)
-    }
-    return runtime
-  }
-
   async listProjects(agent: Agent, input: {
     status?: FormalProject['status']; beforeProjectId?: string; limit?: number
-  } = {}): Promise<{ homeAddress: HomeAddress; projects: FormalProject[];
-    progress: Record<string, ReturnType<typeof projectWorkflowState>>; nextBeforeProjectId?: string }> {
+  } = {}): Promise<{ homeAddress: HomeAddress; projects: FormalProject[]; nextBeforeProjectId?: string }> {
     return this.listProjectsForSession(String(agent.id), agent.session.header.cwd, input)
   }
 
   async listProjectsForSession(sessionId: string, cwd: string | undefined, input: {
     status?: FormalProject['status']; beforeProjectId?: string; limit?: number
-  } = {}): Promise<{ homeAddress: HomeAddress; projects: FormalProject[];
-    progress: Record<string, ReturnType<typeof projectWorkflowState>>; nextBeforeProjectId?: string }> {
+  } = {}): Promise<{ homeAddress: HomeAddress; projects: FormalProject[]; nextBeforeProjectId?: string }> {
     const ledger = this.requireProjectLedger()
     const binding = await this.requireDurableSessionBinding(sessionId, cwd)
     const limit = boundedLimit(input.limit, 20, 100)
@@ -2485,23 +1766,19 @@ export class BizAgentService {
       : visible.findIndex(project => project.id === input.beforeProjectId) + 1
     if (start === 0 && input.beforeProjectId !== undefined) throw new Error('Project cursor not found in current Home')
     const projects = visible.slice(start, start + limit)
-    const work = this.requireWorkLedger().list()
-    const progress = Object.fromEntries(projects.filter(project => project.workflow !== undefined)
-      .map(project => [project.id, projectWorkflowState(project,
-        work.filter(item => item.projectId === project.id))]))
-    return { homeAddress: binding.homeAddress, projects, progress,
+    return { homeAddress: binding.homeAddress, projects,
       ...(start + limit < visible.length ? { nextBeforeProjectId: projects.at(-1)!.id } : {}) }
   }
 
   async readProject(agent: Agent, projectId: string): Promise<{
-    project: FormalProject; work: FormalWork[]; workflow?: ReturnType<typeof projectWorkflowState>
+    project: FormalProject; work: FormalWork[]
   }> {
     return this.readProjectForSession(String(agent.id), agent.session.header.cwd, projectId)
   }
 
   async readProjectForSession(sessionId: string, cwd: string | undefined,
     projectId: string): Promise<{
-      project: FormalProject; work: FormalWork[]; workflow?: ReturnType<typeof projectWorkflowState>
+      project: FormalProject; work: FormalWork[]
     }> {
     const ledger = this.requireProjectLedger()
     const binding = await this.requireDurableSessionBinding(sessionId, cwd)
@@ -2510,259 +1787,7 @@ export class BizAgentService {
       throw new Error('Project is not visible to current Home')
     }
     const work = this.requireWorkLedger().list().filter(item => item.projectId === projectId)
-    return { project, work,
-      ...(project.workflow !== undefined ? { workflow: projectWorkflowState(project, work) } : {}) }
-  }
-
-  async requestProjectHuman(agent: Agent, input: {
-    projectId: string; expectedProjectRevision: number; requestId: string
-    question: string; reason: string; assignee?: string
-    options?: Array<{ label: string; detail?: string }>; contextRefs?: string[]
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    const requestId = input.requestId.trim()
-    const question = input.question.trim()
-    const reason = input.reason.trim()
-    const assigneeInput = input.assignee?.trim()
-    const options = input.options === undefined ? undefined : [...new Map(input.options
-      .map(item => ({ label: item.label.trim(), ...(item.detail?.trim() ? { detail: item.detail.trim() } : {}) }))
-      .filter(item => item.label).map(item => [item.label, item])).values()]
-    const contextRefs = [...new Set((input.contextRefs ?? []).map(item => item.trim()))]
-    if (!Number.isSafeInteger(input.expectedProjectRevision) || input.expectedProjectRevision < 1
-      || !requestId || requestId.length > 128 || !question || question.length > 3000
-      || !reason || reason.length > 3000 || (options !== undefined
-        && (options.length < 2 || options.length > 6 || options.some(item => item.label.length > 80
-          || (item.detail?.length ?? 0) > 200)))
-      || contextRefs.length > 16 || contextRefs.some(item => !item || item.length > 500)) {
-      throw new Error('Project human handoff request is invalid')
-    }
-    const ledger = this.requireProjectLedger()
-    const recorded = await ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || project.lead !== binding.homeAddress) {
-        throw new Error('only the Project lead may request human judgment')
-      }
-      const prior = project.humanHandoffs?.find(item => item.requestId === requestId)
-      if (prior !== undefined) {
-        if (prior.question !== question || prior.reason !== reason
-          || prior.baseProjectRevision !== input.expectedProjectRevision
-          || prior.bySessionId !== String(agent.id)
-          || (assigneeInput !== undefined && prior.assignee !== assigneeInput)
-          || JSON.stringify(prior.options) !== JSON.stringify(options)
-          || JSON.stringify(prior.contextRefs) !== JSON.stringify(contextRefs)) {
-          throw new Error('Project human handoff request ID conflicts with an earlier request')
-        }
-        return { project, handoff: prior, idempotentReplay: true }
-      }
-      if (project.status !== 'open' || project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project human handoff requires the current open Project revision')
-      }
-      if ((project.humanHandoffs?.length ?? 0) >= 100) {
-        throw new Error('Project human handoff limit reached')
-      }
-      const assignee = assigneeInput ?? (() => {
-        const owner = this.store.getHome(project.lead).owner
-        if (!owner) throw new Error('Project lead Home has no human owner; specify assignee')
-        return `user:${owner}`
-      })()
-      let recipient: UserAddress
-      if (assignee.startsWith('role:')) {
-        const seat = project.seats?.find(item => item.homeAddress === assignee && item.status === 'active')
-        const principal = projectRoleAssignmentState(project).bindings
-          .find(item => item.roleHome === assignee)?.principal
-        if (seat === undefined || principal === undefined) {
-          throw new Error('Project human handoff Role has no active Seat and confirmed principal')
-        }
-        recipient = parseUserAddress(`user:${principal}`)
-      } else recipient = parseUserAddress(assignee)
-      const owner = this.store.getHome(project.lead).owner
-      const ownerAddress = owner === undefined ? undefined : parseUserAddress(`user:${owner}`)
-      const fallbackRecipient = ownerAddress === recipient ? undefined : ownerAddress
-      const at = nowIso()
-      const handoff = { id: stableId('project-human-handoff', `${project.id}:${requestId}`),
-        requestId, question, reason, assignee: assignee as UserAddress | HomeAddress, recipient,
-        ...(fallbackRecipient === undefined ? {} : { fallbackRecipient }),
-        ...(options === undefined ? {} : { options }), contextRefs,
-        baseProjectRevision: project.revision, executionEpoch: project.intervention?.epoch ?? 0,
-        bySessionId: String(agent.id), requestedAt: at,
-        messageId: projectHumanMessageId(project.id, project.lead, requestId) }
-      const next: FormalProject = { ...project, status: 'blocked',
-        humanHandoffs: [...(project.humanHandoffs ?? []), handoff],
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, handoff, idempotentReplay: false }
-    })
-    try {
-      const notification = await this.notifyProjectHumanHandoff(recorded.project, recorded.handoff)
-      return { ...recorded, notification: notification ? 'delivered' : 'pending' }
-    } catch (error) {
-      this.recordRuntimeError(`Project human handoff ${recorded.handoff.id}`, error)
-      return { ...recorded, notification: 'pending',
-        notificationError: error instanceof Error ? error.message : String(error) }
-    }
-  }
-
-  async resumeProjectAutonomy(agent: Agent, input: {
-    projectId: string; handoffId: string; replyMessageId: string; expectedProjectRevision: number
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    const ledger = this.requireProjectLedger()
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || project.lead !== binding.homeAddress) {
-        throw new Error('only the Project lead may resume autonomy')
-      }
-      const handoff = project.humanHandoffs?.find(item => item.id === input.handoffId)
-      if (handoff === undefined) throw new Error('Project human handoff is missing')
-      if (handoff.resolution !== undefined) {
-        if (handoff.resolution.replyMessageId !== input.replyMessageId) {
-          throw new Error('Project human handoff was resolved with another reply')
-        }
-        return { project, handoff, idempotentReplay: true,
-          executionPaused: project.intervention?.paused ?? false }
-      }
-      if (project.status !== 'blocked' || project.humanHandoffs?.at(-1)?.id !== handoff.id
-        || project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project human handoff changed; read the current Project')
-      }
-      const parent = this.ledger.getInboxMessage(handoff.messageId)
-      const reply = this.ledger.getInboxMessage(input.replyMessageId)
-      if (parent === undefined || parent.returnToSessionId !== handoff.bySessionId
-        || parent.to.length !== 1 || parent.to[0] !== handoff.recipient
-        || JSON.stringify(parent.cc) !== JSON.stringify(handoff.fallbackRecipient === undefined
-          ? [] : [handoff.fallbackRecipient])
-        || this.ledger.getInboxDelivery(parent.id, handoff.recipient)?.status !== 'delivered'
-        || (handoff.fallbackRecipient !== undefined
-          && this.ledger.getInboxDelivery(parent.id, handoff.fallbackRecipient)?.status !== 'delivered')
-        || reply === undefined || reply.replyTo !== parent.id
-        || (reply.fromAddress !== handoff.recipient
-          && reply.fromAddress !== handoff.fallbackRecipient) || reply.projectId !== project.id
-        || reply.to.length !== 1 || reply.to[0] !== project.lead
-        || this.ledger.getInboxDelivery(reply.id, project.lead)?.status !== 'delivered') {
-        throw new Error('Project human answer is not a delivered reply from an assigned person or owner')
-      }
-      const decision = reply.body.trim()
-      if (!decision) throw new Error('Project human answer is empty')
-      const at = nowIso()
-      const resolved = { ...handoff, resolution: { replyMessageId: reply.id, decision,
-        byUser: parseUserAddress(reply.fromAddress), resumedBySessionId: String(agent.id), at } }
-      const next: FormalProject = { ...project, status: 'open',
-        humanHandoffs: [...(project.humanHandoffs ?? []).slice(0, -1), resolved],
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, handoff: resolved, executionPaused: next.intervention?.paused ?? false }
-    })
-  }
-
-  async reconcileProjectHumanHandoffs(limit = 20): Promise<{
-    delivered: string[]; failed: Array<{ projectId: string; handoffId: string; error: unknown }>
-  }> {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
-      throw new Error('Project human handoff recovery limit must be between 1 and 100')
-    }
-    const delivered: string[] = []
-    const failed: Array<{ projectId: string; handoffId: string; error: unknown }> = []
-    const candidates = this.requireProjectLedger().list().flatMap(project =>
-      (project.humanHandoffs ?? []).filter(handoff =>
-        !this.ledger.getInboxMessage(handoff.messageId)
-          || this.ledger.getInboxDelivery(handoff.messageId, handoff.recipient)?.status !== 'delivered'
-          || (handoff.fallbackRecipient !== undefined
-            && this.ledger.getInboxDelivery(handoff.messageId, handoff.fallbackRecipient)?.status !== 'delivered'))
-        .map(handoff => ({ project, handoff })))
-    const count = Math.min(limit, candidates.length)
-    for (let i = 0; i < count; i++) {
-      const { project, handoff } = candidates[(this.projectHumanRecoveryOffset + i) % candidates.length]!
-      try {
-        await this.notifyProjectHumanHandoff(project, handoff)
-        delivered.push(handoff.id)
-      } catch (error) { failed.push({ projectId: project.id, handoffId: handoff.id, error }) }
-    }
-    if (candidates.length > 0) this.projectHumanRecoveryOffset =
-      (this.projectHumanRecoveryOffset + count) % candidates.length
-    return { delivered, failed }
-  }
-
-  private async notifyProjectHumanHandoff(project: FormalProject,
-    handoff: NonNullable<FormalProject['humanHandoffs']>[number]): Promise<boolean> {
-    if (this.ledger.getInboxMessage(handoff.messageId)
-      && this.ledger.getInboxDelivery(handoff.messageId, handoff.recipient)?.status === 'delivered'
-      && (handoff.fallbackRecipient === undefined
-        || this.ledger.getInboxDelivery(handoff.messageId, handoff.fallbackRecipient)?.status === 'delivered')) return true
-    const binding = this.ledger.getBinding(handoff.bySessionId)
-    if (binding === undefined || binding.homeAddress !== project.lead) {
-      throw new Error('Project human handoff sender Session binding is unavailable')
-    }
-    const result = await this.sendInboxFromBinding(binding, handoff.bySessionId,
-      handoff.requestId, { to: [handoff.recipient], projectId: project.id,
-        cc: handoff.fallbackRecipient === undefined ? [] : [handoff.fallbackRecipient],
-        idempotencyKey: stableId('project-human-key', `${project.id}:${handoff.requestId}`),
-        subject: `Project decision: ${project.title}`,
-        body: [handoff.question, '', handoff.reason].join('\n'),
-        kind: 'ordinary', priority: 'urgent', contextRefs: handoff.contextRefs,
-        humanAction: { request: handoff.question, reason: handoff.reason,
-          ...(handoff.options === undefined ? {} : { options: handoff.options }) } })
-    const notification = result.message as InboxMessage
-    if (notification.id !== handoff.messageId
-      || this.ledger.getInboxDelivery(handoff.messageId, handoff.recipient)?.status !== 'delivered'
-      || (handoff.fallbackRecipient !== undefined
-        && this.ledger.getInboxDelivery(handoff.messageId, handoff.fallbackRecipient)?.status !== 'delivered')) {
-      throw new Error('Project human handoff notification was not delivered')
-    }
-    return true
-  }
-
-  async supplementProjectWork(agent: Agent, input: {
-    projectId: string; workId: string; expectedEpoch: number; requestId: string; message: string
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    const requestId = input.requestId.trim()
-    const message = input.message.trim()
-    if (!Number.isSafeInteger(input.expectedEpoch) || input.expectedEpoch < 0
-      || !requestId || requestId.length > 128 || !message || message.length > 4000) {
-      throw new Error('Project Work supplement request is invalid')
-    }
-    const projects = this.requireProjectLedger()
-    const works = this.requireWorkLedger()
-    return projects.withWrite(async () => {
-      const project = projects.get(input.projectId)
-      if (project === undefined || project.lead !== binding.homeAddress) {
-        throw new Error('only the Project lead may supplement linked Work')
-      }
-      return works.withWrite(async () => {
-        const work = works.get(input.workId)
-        if (work === undefined || work.projectId !== project.id) {
-          throw new Error('Work does not belong to this Project')
-        }
-        const prior = work.supplements?.find(item => item.requestId === requestId)
-        if (prior !== undefined) {
-          if (prior.epoch !== input.expectedEpoch || prior.message !== message
-            || prior.bySessionId !== String(agent.id)) {
-            throw new Error('Project Work supplement request ID conflicts with an earlier supplement')
-          }
-          return { workId: work.id, supplement: prior, workerSessionId: work.workerSessionId,
-            idempotentReplay: true }
-        }
-        if (project.status !== 'open' || project.intervention?.paused
-          || (project.intervention?.epoch ?? 0) !== input.expectedEpoch) {
-          throw new Error('Project execution changed or is paused; inspect before supplementing Work')
-        }
-        if (work.status !== 'open' && work.status !== 'accepted') {
-          throw new Error('Project Work supplement requires open or accepted Work')
-        }
-        if ((work.supplements?.length ?? 0) >= 100) {
-          throw new Error('Project Work supplement limit reached')
-        }
-        const supplement = {
-          id: stableId('project-work-supplement', `${project.id}:${work.id}:${requestId}`),
-          requestId, epoch: input.expectedEpoch, message,
-          bySessionId: String(agent.id), createdAt: nowIso(),
-        }
-        await works.put({ ...work, supplements: [...(work.supplements ?? []), supplement],
-          updatedAt: supplement.createdAt })
-        return { workId: work.id, supplement, workerSessionId: work.workerSessionId,
-          idempotentReplay: false }
-      })
-    })
+    return { project, work }
   }
 
   async inviteProjectSeat(agent: Agent, input: {
@@ -2794,221 +1819,6 @@ export class BizAgentService {
     })
   }
 
-  async suggestProjectRolePrincipal(agent: Agent, input: {
-    projectId: string; roleHome: string; proposedPrincipal: string; reason: string
-    expectedProjectRevision: number; idempotencyKey: string
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    const roleHome = parseHomeAddress(input.roleHome.trim())
-    const proposedPrincipal = input.proposedPrincipal.trim()
-    const reason = input.reason.trim()
-    const key = input.idempotencyKey.trim()
-    if (!roleHome.startsWith('role:') || !proposedPrincipal || proposedPrincipal.length > 200
-      || !reason || reason.length > 2000 || !key || key.length > 128
-      || !Number.isSafeInteger(input.expectedProjectRevision) || input.expectedProjectRevision < 1) {
-      throw new Error('Project role suggestion request is invalid')
-    }
-    const ledger = this.requireProjectLedger()
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || !projectVisibleToHome(project, binding.homeAddress)) {
-        throw new Error('Project role suggestion is not visible to current Home')
-      }
-      const prior = project.roleSuggestions?.find(item => item.idempotencyKey === key)
-      if (prior !== undefined) {
-        if (prior.roleHome !== roleHome || prior.proposedPrincipal !== proposedPrincipal
-          || prior.reason !== reason || prior.bySessionId !== String(agent.id)
-          || prior.baseProjectRevision !== input.expectedProjectRevision) {
-          throw new Error('Project role suggestion key conflicts with another proposal')
-        }
-        return { project, suggestion: prior, idempotentReplay: true }
-      }
-      if (project.status !== 'open' || project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project role suggestion requires the current open Project revision')
-      }
-      if (!(project.seats ?? []).some(item => item.homeAddress === roleHome && item.status === 'active')
-        || !this.store.hasHome(roleHome) || this.store.getHome(roleHome).status !== 'active') {
-        throw new Error('Project role suggestion requires an active Role Seat')
-      }
-      if (!this.store.listHomes().some(home => home.owner === proposedPrincipal
-        && home.status === 'active')) {
-        throw new Error('Project role suggestion requires a registered human principal')
-      }
-      if ((project.roleSuggestions?.length ?? 0) >= 500) {
-        throw new Error('Project role suggestion limit reached')
-      }
-      const state = projectRoleAssignmentState(project)
-      const duplicate = state.suggestions.find(item => item.status === 'pending'
-        && item.roleHome === roleHome && item.proposedPrincipal === proposedPrincipal
-        && item.reason === reason)
-      if (duplicate !== undefined) return { project, suggestion: duplicate, idempotentReplay: true }
-      const at = nowIso()
-      const suggestion = { id: stableId('project-role-suggestion', `${project.id}:${key}`),
-        idempotencyKey: key, roleHome, proposedPrincipal, reason,
-        baseProjectRevision: project.revision,
-        baseRoleRevision: (project.roleDecisions ?? []).filter(item => item.roleHome === roleHome
-          && item.action !== 'reject').length,
-        bySessionId: String(agent.id), at }
-      const next: FormalProject = { ...project,
-        roleSuggestions: [...(project.roleSuggestions ?? []), suggestion],
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, suggestion }
-    })
-  }
-
-  async decideProjectRoleAsHuman(principal: string, input: {
-    projectId: string; roleHome: string; action: 'assign' | 'clear' | 'reject'
-    targetPrincipal?: string; suggestionId?: string; expectedProjectRevision: number
-    expectedBindingRevision: number; idempotencyKey: string; reason: string
-  }, authorizeManager: (principal: string, project: FormalProject) => boolean | Promise<boolean>,
-  authorizeTarget: (targetPrincipal: string, project: FormalProject,
-    roleHome: HomeAddress) => boolean | Promise<boolean>): Promise<Record<string, unknown>> {
-    const actor = principal.trim()
-    const roleHome = parseHomeAddress(input.roleHome.trim())
-    const targetPrincipal = input.targetPrincipal?.trim() || undefined
-    const reason = input.reason.trim()
-    const key = input.idempotencyKey.trim()
-    if (!actor || actor.length > 200 || !roleHome.startsWith('role:')
-      || !key || key.length > 128 || !reason || reason.length > 2000
-      || !Number.isSafeInteger(input.expectedProjectRevision) || input.expectedProjectRevision < 1
-      || !Number.isSafeInteger(input.expectedBindingRevision) || input.expectedBindingRevision < 0
-      || (input.action === 'assign') !== (targetPrincipal !== undefined && targetPrincipal.length > 0)
-      || (input.action === 'reject' && input.suggestionId === undefined)
-      || (input.action === 'clear' && input.suggestionId !== undefined)) {
-      throw new Error('Project role decision request is invalid')
-    }
-    const ledger = this.requireProjectLedger()
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || !await authorizeManager(actor, project)) {
-        throw new Error('Project role decision is not authorized for the current Project')
-      }
-      const prior = project.roleDecisions?.find(item => item.idempotencyKey === key)
-      if (prior !== undefined) {
-        if (prior.byPrincipal !== actor || prior.roleHome !== roleHome || prior.action !== input.action
-          || prior.principal !== targetPrincipal || prior.suggestionId !== input.suggestionId
-          || prior.reason !== reason || prior.baseProjectRevision !== input.expectedProjectRevision
-          || prior.baseBindingRevision !== input.expectedBindingRevision) {
-          throw new Error('Project role decision key conflicts with another action')
-        }
-        return { project, decision: prior, idempotentReplay: true }
-      }
-      if (project.status !== 'open' || project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project role decision requires the current open Project revision')
-      }
-      const state = projectRoleAssignmentState(project)
-      if (state.revision !== input.expectedBindingRevision) {
-        throw new Error('Project role binding revision conflict')
-      }
-      const seat = project.seats?.find(item => item.homeAddress === roleHome)
-      if (seat === undefined || (input.action === 'assign' && (seat.status !== 'active'
-        || !this.store.hasHome(roleHome) || this.store.getHome(roleHome).status !== 'active'))) {
-        throw new Error('Project role decision requires an eligible Role Seat')
-      }
-      const current = state.bindings.find(item => item.roleHome === roleHome)?.principal
-      const suggestion = input.suggestionId === undefined ? undefined
-        : state.suggestions.find(item => item.id === input.suggestionId)
-      if (input.suggestionId !== undefined && (suggestion?.roleHome !== roleHome
-        || suggestion.status !== 'pending')) {
-        throw new Error('Project role suggestion is no longer pending')
-      }
-      if (input.action === 'assign') {
-        if (targetPrincipal === current || (suggestion !== undefined
-          && suggestion.proposedPrincipal !== targetPrincipal)
-          || !await authorizeTarget(targetPrincipal!, project, roleHome)) {
-          throw new Error('Project role target is not authorized or has changed')
-        }
-      } else if (input.action === 'clear' && current === undefined) {
-        throw new Error('Project role has no binding to clear')
-      }
-      if ((project.roleDecisions?.length ?? 0) >= 500) {
-        throw new Error('Project role decision limit reached')
-      }
-      const at = nowIso()
-      const decision = { id: stableId('project-role-decision', `${project.id}:${key}`),
-        idempotencyKey: key, action: input.action, roleHome,
-        ...(targetPrincipal === undefined ? {} : { principal: targetPrincipal }),
-        ...(current === undefined ? {} : { previousPrincipal: current }),
-        ...(input.suggestionId === undefined ? {} : { suggestionId: input.suggestionId }),
-        baseProjectRevision: project.revision, baseBindingRevision: state.revision,
-        bindingRevision: state.revision + Number(input.action !== 'reject'),
-        reason, byPrincipal: actor, at }
-      const next: FormalProject = { ...project,
-        roleDecisions: [...(project.roleDecisions ?? []), decision],
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, decision, assignments: projectRoleAssignmentState(next) }
-    })
-  }
-
-  async delegateProjectWork(agent: Agent, input: {
-    projectId: string; toAddress: string; responsibility: string
-    goal: string; acceptanceCriteria: string
-    idempotencyKey: string
-  }): Promise<Record<string, unknown>> {
-    const ledger = this.requireProjectLedger()
-    const binding = await this.requireDurableBinding(agent)
-    const target = parseHomeAddress(input.toAddress.trim())
-    const responsibility = input.responsibility.trim()
-    if (!responsibility || responsibility.length > 1000) {
-      throw new Error('Project Seat responsibility must contain 1 to 1000 characters')
-    }
-    const goal = input.goal.trim()
-    const acceptanceCriteria = input.acceptanceCriteria.trim()
-    const idempotencyKey = input.idempotencyKey.trim()
-    if (!goal || goal.length > 180) throw new Error('Work goal must contain 1 to 180 characters')
-    if (!acceptanceCriteria || acceptanceCriteria.length > 4000) {
-      throw new Error('Work acceptance criteria must contain 1 to 4000 characters')
-    }
-    if (!idempotencyKey || idempotencyKey.length > 128) {
-      throw new Error('Work idempotency key must contain 1 to 128 characters')
-    }
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId.trim())
-      if (project === undefined || project.workflow !== undefined) {
-        throw new Error('Project delegation requires a dynamic Project')
-      }
-      if (target === project.lead || target === binding.homeAddress || target.startsWith('personal:')) {
-        throw new Error('Project delegation requires another shared Agent Home')
-      }
-      if (this.store.getHome(target).status !== 'active') {
-        throw new Error(`Project Seat Home is not active: ${target}`)
-      }
-      const existingId = stableId('work', `${binding.homeAddress}:${idempotencyKey}`)
-      const existingWork = this.requireWorkLedger().get(existingId)
-      if (existingWork !== undefined) {
-        if (existingWork.requester !== binding.homeAddress || existingWork.projectId !== project.id) {
-          throw new Error('Project Work idempotency key conflicts with an existing request')
-        }
-        const result = await this.dispatchWorkRecord(agent, {
-          toAddress: target, goal, acceptanceCriteria,
-          idempotencyKey, projectId: project.id,
-          ...(existingWork.requesterSeatAddress !== undefined
-            ? { requesterSeatAddress: existingWork.requesterSeatAddress } : {}),
-          assigneeSeatAddress: `seat:${project.id}:${stableId('seat', target)}`,
-        })
-        return { ...result, seat: (project.seats ?? []).find(seat => seat.homeAddress === target),
-          projectRevision: project.revision, idempotentReplay: true }
-      }
-      if (project.status !== 'open' || project.intervention?.paused
-        || !projectVisibleToHome(project, binding.homeAddress)) {
-        throw new Error('Project delegation requires an open dynamic Project led by or shared with the requester Home')
-      }
-      const requesterSeat = (project.seats ?? []).find(seat => seat.homeAddress === binding.homeAddress
-        && seat.status === 'active')
-      const updated = upsertProjectSeat(project, target, responsibility, String(agent.id))
-      if (updated.project !== project) await ledger.put(updated.project)
-      const result = await this.dispatchWorkRecord(agent, {
-        toAddress: target, goal, acceptanceCriteria,
-        idempotencyKey, projectId: project.id,
-        ...(requesterSeat !== undefined ? { requesterSeatAddress: requesterSeat.address } : {}),
-        assigneeSeatAddress: updated.seat.address,
-      })
-      return { ...result, seat: updated.seat, projectRevision: updated.project.revision }
-    })
-  }
-
   async releaseProjectSeat(agent: Agent, input: {
     projectId: string; seatAddress: string
   }): Promise<Record<string, unknown>> {
@@ -3026,8 +1836,7 @@ export class BizAgentService {
           seat: previous, idempotentReplay: true }
       }
       if (this.requireWorkLedger().list().some(work => work.projectId === project.id
-        && (work.assigneeSeatAddress === previous.address || work.requesterSeatAddress === previous.address
-          || (work.assignee === previous.homeAddress && work.assigneeSeatAddress === undefined))
+        && work.assignee === previous.homeAddress
         && !['completed', 'cancelled'].includes(work.status))) {
         throw new Error('Project Seat has unsettled formal Work')
       }
@@ -3075,805 +1884,6 @@ export class BizAgentService {
     }
   }
 
-  async publishProjectWorkingAsset(agent: Agent, input: {
-    projectId: string; path: string; expectedProjectRevision: number
-    expectedPreviousSha256: string | null; idempotencyKey: string
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    const path = checkedProjectWorkingPath(input.path)
-    const idempotencyKey = input.idempotencyKey.trim()
-    if (!idempotencyKey || idempotencyKey.length > 128
-      || !Number.isSafeInteger(input.expectedProjectRevision) || input.expectedProjectRevision < 1
-      || (input.expectedPreviousSha256 !== null && !/^[a-f0-9]{64}$/.test(input.expectedPreviousSha256))) {
-      throw new Error('Project working asset request is invalid')
-    }
-    const ledger = this.requireProjectLedger()
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || !projectVisibleToHome(project, binding.homeAddress)) {
-        throw new Error('Project working asset is not visible to current Home')
-      }
-      const prior = project.workingAssets?.find(item => item.idempotencyKey === idempotencyKey)
-      if (prior !== undefined) {
-        if (prior.path !== path || prior.baseProjectRevision !== input.expectedProjectRevision
-          || (prior.previousSha256 ?? null) !== input.expectedPreviousSha256) {
-          throw new Error('Project working asset key conflicts with another publication')
-        }
-        return { project, asset: prior, idempotentReplay: true }
-      }
-      if (project.status !== 'open' && project.status !== 'awaiting_acceptance') {
-        throw new Error('Project is not open for working asset publication')
-      }
-      if (project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project working asset revision conflict')
-      }
-      const previous = project.workingAssets?.findLast(item => item.path === path)
-      if ((previous?.sha256 ?? null) !== input.expectedPreviousSha256) {
-        throw new Error('Project working asset version changed; read the current version')
-      }
-      if ((project.workingAssets?.length ?? 0) >= 1000
-        || (previous === undefined && new Set(project.workingAssets?.map(item => item.path)).size >= 100)) {
-        throw new Error('Project working asset limit reached')
-      }
-      if (binding.cwd === undefined || agent.session.header.cwd === undefined
-        || resolve(binding.cwd) !== resolve(agent.session.header.cwd)) {
-        throw new Error('Project working assets require the bound Session Workspace')
-      }
-      const captured = await captureWorklogFile(binding.cwd, path)
-      await new ProjectSnapshotStore(this.store.root).retain(captured.content)
-      const at = nowIso()
-      const asset = { path, revision: (previous?.revision ?? 0) + 1,
-        sha256: captured.sha256, bytes: captured.bytes,
-        ...(previous === undefined ? {} : { previousSha256: previous.sha256 }),
-        baseProjectRevision: project.revision, idempotencyKey,
-        publishedBySessionId: String(agent.id), publishedAt: at }
-      const next: FormalProject = { ...project,
-        workingAssets: [...(project.workingAssets ?? []), asset],
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, asset }
-    })
-  }
-
-  async readProjectWorkingAsset(agent: Agent, input: {
-    projectId: string; path: string; revision?: number; offset?: number; limit?: number
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    const project = this.requireProjectLedger().get(input.projectId)
-    if (project === undefined || !projectVisibleToHome(project, binding.homeAddress)) {
-      throw new Error('Project working asset is not visible to current Home')
-    }
-    const path = checkedProjectWorkingPath(input.path)
-    const asset = input.revision === undefined
-      ? project.workingAssets?.findLast(item => item.path === path)
-      : project.workingAssets?.find(item => item.path === path && item.revision === input.revision)
-    if (asset === undefined) throw new Error('Project working asset version not found')
-    const offset = input.offset ?? 0
-    const limit = boundedLimit(input.limit, 8192, 65536)
-    if (!Number.isSafeInteger(offset) || offset < 0 || offset > asset.bytes) {
-      throw new Error('Project working asset offset is outside the retained snapshot')
-    }
-    const bytes = await new ProjectSnapshotStore(this.store.root).read(asset.sha256, asset.bytes)
-    const end = Math.min(offset + limit, bytes.length)
-    return { projectId: project.id, path, revision: asset.revision,
-      sha256: asset.sha256, bytes: asset.bytes, offset,
-      contentBase64: bytes.subarray(offset, end).toString('base64'),
-      nextOffset: end < bytes.length ? end : undefined }
-  }
-
-  async addProjectDeliveryFeedback(agent: Agent, input: {
-    projectId: string; path: string; version: 'working' | 'submitted'
-    expectedSha256: string; expectedProjectRevision: number; idempotencyKey: string
-    section?: string; body: string
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    return this.recordProjectDeliveryFeedback(input, { bySessionId: String(agent.id) },
-      project => projectVisibleToHome(project, binding.homeAddress))
-  }
-
-  async addProjectDeliveryFeedbackAsHuman(principal: string, input: {
-    projectId: string; path: string; version: 'working' | 'submitted'
-    expectedSha256: string; expectedProjectRevision: number; idempotencyKey: string
-    section?: string; body: string
-  }, authorize: (principal: string, project: FormalProject) => boolean | Promise<boolean>):
-    Promise<Record<string, unknown>> {
-    const userId = principal.trim()
-    if (!userId || userId.length > 200) throw new Error('Project delivery feedback principal is invalid')
-    return this.recordProjectDeliveryFeedback(input, { byPrincipal: userId },
-      project => authorize(userId, project))
-  }
-
-  private async recordProjectDeliveryFeedback(input: {
-    projectId: string; path: string; version: 'working' | 'submitted'
-    expectedSha256: string; expectedProjectRevision: number; idempotencyKey: string
-    section?: string; body: string
-  }, actor: { bySessionId: string; byPrincipal?: never } | { byPrincipal: string; bySessionId?: never },
-  authorize: (project: FormalProject) => boolean | Promise<boolean>): Promise<Record<string, unknown>> {
-    const path = checkedProjectWorkingPath(input.path)
-    const body = input.body.trim()
-    const section = input.section?.trim()
-    const key = input.idempotencyKey.trim()
-    if (!key || key.length > 128 || !body || body.length > 5000
-      || (section !== undefined && (!section || section.length > 200))
-      || !/^[a-f0-9]{64}$/.test(input.expectedSha256)
-      || !Number.isSafeInteger(input.expectedProjectRevision) || input.expectedProjectRevision < 1) {
-      throw new Error('Project delivery feedback request is invalid')
-    }
-    const ledger = this.requireProjectLedger()
-    const result = await ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || !await authorize(project)) {
-        throw new Error('Project delivery feedback is not authorized for the current Project')
-      }
-      const prior = project.deliveryFeedback?.find(item => item.idempotencyKey === key)
-      if (prior !== undefined) {
-        if (prior.bySessionId !== actor.bySessionId || prior.byPrincipal !== actor.byPrincipal
-          || prior.path !== path
-          || prior.version !== input.version || prior.sha256 !== input.expectedSha256
-          || prior.body !== body || prior.section !== section) {
-          throw new Error('Project delivery feedback key conflicts with another opinion')
-        }
-        return { project, feedback: prior, idempotentReplay: true }
-      }
-      if ((project.status !== 'open' && project.status !== 'awaiting_acceptance')
-        || (project.deliveryFeedback?.length ?? 0) >= 1000) {
-        throw new Error('Project is not open for delivery feedback')
-      }
-      if (project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project delivery feedback revision conflict')
-      }
-      const working = input.version === 'working'
-        ? project.workingAssets?.findLast(item => item.path === path) : undefined
-      const claim = input.version === 'submitted' && project.status === 'awaiting_acceptance'
-        ? project.claims.find(item => item.id === project.currentClaimId) : undefined
-      const artifact = claim?.artifacts?.find(item => item.path === path)
-      const source = working ?? artifact
-      if (source === undefined || source.sha256 !== input.expectedSha256) {
-        throw new Error('Project delivery asset changed; read its current version')
-      }
-      await new ProjectSnapshotStore(this.store.root).read(source.sha256, source.bytes)
-      const at = nowIso()
-      const feedback = {
-        id: stableId('project-feedback', `${project.id}:${key}`), idempotencyKey: key,
-        path, version: input.version, sha256: source.sha256, bytes: source.bytes,
-        ...(working === undefined ? { claimId: claim!.id } : { workingRevision: working.revision }),
-        ...(section === undefined ? {} : { section }), body,
-        ...actor, at,
-      }
-      const next: FormalProject = { ...project,
-        deliveryFeedback: [...(project.deliveryFeedback ?? []), feedback],
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, feedback }
-    })
-    if (result.idempotentReplay && (result.feedback.resolution !== undefined
-      || (result.project.status !== 'open' && result.project.status !== 'awaiting_acceptance'))) return result
-    const notification = await this.deliverProjectDeliveryFeedbackNotice(result.project, result.feedback)
-      .catch(error => {
-        this.recordRuntimeError(`Project delivery feedback notice ${result.project.id}/${result.feedback.id}`, error)
-        return 'pending' as const
-      })
-    return { ...result, notification }
-  }
-
-  async resolveProjectDeliveryFeedback(agent: Agent, input: {
-    projectId: string; feedbackId: string; expectedProjectRevision: number
-    reply: string; path: string; workingRevision: number
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    const path = checkedProjectWorkingPath(input.path)
-    const reply = input.reply.trim()
-    if (!reply || reply.length > 5000 || !Number.isSafeInteger(input.expectedProjectRevision)
-      || input.expectedProjectRevision < 1 || !Number.isSafeInteger(input.workingRevision)
-      || input.workingRevision < 1) {
-      throw new Error('Project delivery feedback resolution is invalid')
-    }
-    const ledger = this.requireProjectLedger()
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || project.lead !== binding.homeAddress) {
-        throw new Error('only the Project lead Home may resolve delivery feedback')
-      }
-      const current = project.deliveryFeedback?.find(item => item.id === input.feedbackId)
-      if (current === undefined) throw new Error('Project delivery feedback not found')
-      if (current.resolution !== undefined) {
-        if (current.resolution.bySessionId !== String(agent.id) || current.resolution.reply !== reply
-          || current.resolution.path !== path || current.resolution.workingRevision !== input.workingRevision) {
-          throw new Error('Project delivery feedback was resolved differently')
-        }
-        return { project, feedback: current, idempotentReplay: true }
-      }
-      if (project.status !== 'open' && project.status !== 'awaiting_acceptance') {
-        throw new Error('Project is not open for delivery feedback resolution')
-      }
-      if (project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project delivery feedback revision conflict')
-      }
-      const asset = project.workingAssets?.find(item => item.path === path && item.revision === input.workingRevision)
-      if (asset === undefined) throw new Error('Project working asset version not found for resolution')
-      await new ProjectSnapshotStore(this.store.root).read(asset.sha256, asset.bytes)
-      const at = nowIso()
-      const feedback = { ...current, resolution: { reply, path, workingRevision: asset.revision,
-        sha256: asset.sha256, bySessionId: String(agent.id), at } }
-      const next: FormalProject = { ...project,
-        deliveryFeedback: project.deliveryFeedback!.map(item => item.id === current.id ? feedback : item),
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, feedback }
-    })
-  }
-
-  async readProjectDeliveryFeedbackSnapshot(agent: Agent, input: {
-    projectId: string; feedbackId: string; offset?: number; limit?: number
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    const project = this.requireProjectLedger().get(input.projectId)
-    if (project === undefined || !projectVisibleToHome(project, binding.homeAddress)) {
-      throw new Error('Project delivery feedback is not visible to current Home')
-    }
-    const feedback = project.deliveryFeedback?.find(item => item.id === input.feedbackId)
-    if (feedback === undefined) throw new Error('Project delivery feedback not found')
-    const offset = input.offset ?? 0
-    const limit = boundedLimit(input.limit, 8192, 65536)
-    if (!Number.isSafeInteger(offset) || offset < 0 || offset > feedback.bytes) {
-      throw new Error('Project delivery feedback offset is outside the retained snapshot')
-    }
-    const bytes = await new ProjectSnapshotStore(this.store.root).read(feedback.sha256, feedback.bytes)
-    const end = Math.min(offset + limit, bytes.length)
-    return { projectId: project.id, feedbackId: feedback.id, path: feedback.path,
-      version: feedback.version, sha256: feedback.sha256, bytes: feedback.bytes, offset,
-      contentBase64: bytes.subarray(offset, end).toString('base64'),
-      nextOffset: end < bytes.length ? end : undefined }
-  }
-
-  async reconcileProjectDeliveryFeedbackNotifications(limit = 20): Promise<{
-    delivered: string[]; failed: Array<{ projectId: string; feedbackId: string; error: unknown }>
-  }> {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
-      throw new Error('Invalid Project delivery feedback notice limit')
-    }
-    const delivered: string[] = []
-    const failed: Array<{ projectId: string; feedbackId: string; error: unknown }> = []
-    for (const project of this.requireProjectLedger().list()) {
-      if (project.status !== 'open' && project.status !== 'awaiting_acceptance') continue
-      for (const feedback of project.deliveryFeedback ?? []) {
-        if (feedback.resolution !== undefined) continue
-        if (delivered.length + failed.length >= limit) return { delivered, failed }
-        const id = stableId('project-delivery-feedback', `${project.id}:${feedback.id}`)
-        if (this.ledger.getInboxMessage(id) && this.ledger.getInboxDelivery(id, project.lead)) continue
-        try {
-          await this.deliverProjectDeliveryFeedbackNotice(project, feedback)
-          delivered.push(id)
-        } catch (error) { failed.push({ projectId: project.id, feedbackId: feedback.id, error }) }
-      }
-    }
-    return { delivered, failed }
-  }
-
-  private async deliverProjectDeliveryFeedbackNotice(project: FormalProject,
-    feedback: NonNullable<FormalProject['deliveryFeedback']>[number]): Promise<'delivered'> {
-    const id = stableId('project-delivery-feedback', `${project.id}:${feedback.id}`)
-    await this.ledger.withInboxWrite(async () => {
-      const existing = this.ledger.getInboxMessage(id)
-      if (existing !== undefined && (existing.projectDeliveryFeedback?.projectId !== project.id
-        || existing.projectDeliveryFeedback.feedbackId !== feedback.id
-        || existing.projectDeliveryFeedback.lead !== project.lead)) {
-        throw new Error('Project delivery feedback notice ID belongs to another opinion')
-      }
-      if (existing === undefined) {
-        const message: InboxMessage = {
-          schemaVersion: 1, id,
-          idempotencyKey: `project-delivery-feedback:${project.id}:${feedback.id}`,
-          fromAddress: 'engine:inbox', to: [project.lead], cc: [], projectId: project.id,
-          projectDeliveryFeedback: { projectId: project.id, feedbackId: feedback.id, lead: project.lead },
-          subject: `Project delivery feedback: ${feedback.path}`.slice(0, 200),
-          body: [
-            `Project: ${project.id}`,
-            `Feedback ID: ${feedback.id}`,
-            `Reviewed ${feedback.version} asset: ${feedback.path}`,
-            `Reviewed SHA-256: ${feedback.sha256}`,
-            ...(feedback.section === undefined ? [] : [`Section: ${feedback.section}`]),
-            `Feedback: ${feedback.body}`,
-            'Read the exact feedback snapshot and current working asset. Check the impact before changing active Work. Publish a revised working asset and resolve the feedback with a reason and the published version.',
-          ].join('\n'),
-          kind: 'project-delivery-feedback', priority: 'urgent', contextRefs: [],
-          rootId: id, topicId: id, chain: 0, hop: 0, sentAt: feedback.at,
-        }
-        await this.ledger.putInboxMessage(message)
-      }
-      if (this.ledger.getInboxDelivery(id, project.lead) === undefined) {
-        await this.ledger.putInboxDelivery({ schemaVersion: 1, messageId: id,
-          recipient: project.lead, status: 'delivered', wakePolicy: 'immediate',
-          wakeAt: feedback.at, updatedAt: nowIso() })
-      }
-    })
-    return 'delivered'
-  }
-
-  async dispatchProjectNode(agent: Agent, input: {
-    projectId: string; nodeId: string
-  }): Promise<Record<string, unknown>> {
-    const ledger = this.requireProjectLedger()
-    const binding = await this.requireDurableBinding(agent)
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || project.lead !== binding.homeAddress || project.status !== 'open'
-        || project.intervention?.paused) {
-        throw new Error('only the lead Home may dispatch a node in an open Project')
-      }
-      const step = project.workflow?.steps.find(item => item.id === input.nodeId)
-      if (step === undefined) throw new Error('Project Workflow node not found')
-      const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-      const state = projectWorkflowState(project, work)
-      const node = state.nodes.find(item => item.id === step.id)
-      if (node?.status === 'done') return { node, alreadyCompleted: true }
-      if (node?.status === 'pending') throw new Error('Project Workflow node dependencies are not complete')
-      if (node?.status === 'waiting') throw new Error('Project Workflow node is waiting for its assigned review')
-      await this.verifyApprovedNodeArtifacts(project, work, step.id)
-      const attempts = work.filter(item => item.workflowNodeId === step.id)
-      const latest = attempts.sort((a, b) => (b.workflowAttempt ?? 0) - (a.workflowAttempt ?? 0))[0]
-      const attempt = node?.status === 'running' && latest !== undefined
-        ? latest.workflowAttempt! : (latest?.workflowAttempt ?? 0) + 1
-      const result = await this.dispatchWorkRecord(agent, {
-        toAddress: step.executor, goal: step.intent,
-        acceptanceCriteria: step.acceptanceCriteria,
-        idempotencyKey: stableId('workflow-work', `${project.id}:${step.id}:${attempt}`),
-        projectId: project.id, workflowNodeId: step.id, workflowAttempt: attempt,
-      })
-      return { ...result, nodeId: step.id, attempt }
-    })
-  }
-
-  async readProjectNode(agent: Agent, input: { projectId: string; nodeId: string }): Promise<Record<string, unknown>> {
-    const ledger = this.requireProjectLedger()
-    const binding = await this.requireDurableBinding(agent)
-    const project = ledger.get(input.projectId)
-    const step = project?.workflow?.steps.find(item => item.id === input.nodeId)
-    if (project === undefined || step === undefined) {
-      throw new Error('Project Workflow node is not visible to current Home')
-    }
-    const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-    const node = projectWorkflowState(project, work).nodes.find(item => item.id === step.id)
-    const latestWork = currentWorkflowWork(project, work).filter(item => item.workflowNodeId === step.id)
-      .sort((a, b) => (b.workflowAttempt ?? 0) - (a.workflowAttempt ?? 0))[0]
-    if (!projectVisibleToHome(project, binding.homeAddress)) {
-      const currentProgression = project.progressionChanges?.at(-1)
-      if (latestWork?.status !== 'completed' && currentProgression?.mode === 'reviewed'
-        && !currentProgression.reviewers.some(item => item.nodeId === step.id)
-        && step.reviewer === undefined) {
-        throw new Error('Project Workflow node is not visible to current Home')
-      }
-      const gate = latestWork?.status === 'completed' ? workReviewGate(step, latestWork)
-        : currentWorkflowReview(project, step)
-      if (gate.mode !== 'reviewed' || gate.reviewerHome !== binding.homeAddress) {
-        throw new Error('Project Workflow node is not visible to current Home')
-      }
-    }
-    if (latestWork !== undefined && assignedNodeReviewer(project, latestWork.id) !== undefined
-      && !projectVisibleToHome(project, binding.homeAddress)) {
-      throw new Error('Project Workflow node is not visible to current Home')
-    }
-    return {
-      projectId: project.id, projectGoal: project.goal, doneWhen: project.doneWhen,
-      step, node, latestWork,
-      review: (project.nodeReviews ?? []).find(item => item.workId === latestWork?.id),
-      reopen: (project.nodeReopens ?? []).find(item => item.workId === latestWork?.id),
-    }
-  }
-
-  async reopenProjectNode(agent: Agent, input: {
-    projectId: string; nodeId: string; reason: string
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    return this.decideProjectNodeReopen(input, { reopenedBySessionId: String(agent.id) },
-      project => project.lead === binding.homeAddress,
-      'only the lead Home may reopen a node in an open Project')
-  }
-
-  async reopenProjectNodeAsHuman(principal: string, input: {
-    projectId: string; nodeId: string; reason: string; expectedRevision: number
-  }, authorize: (principal: string, project: FormalProject) => boolean | Promise<boolean>):
-    Promise<Record<string, unknown>> {
-    if (!principal.trim() || principal.length > 200) throw new Error('Workflow reopen principal is invalid')
-    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
-      throw new Error('Workflow reopen revision is invalid')
-    }
-    return this.decideProjectNodeReopen(input, { reopenedByPrincipal: principal },
-      project => authorize(principal, project))
-  }
-
-  private async decideProjectNodeReopen(input: {
-    projectId: string; nodeId: string; reason: string; expectedRevision?: number
-  }, actor: { reopenedBySessionId: string } | { reopenedByPrincipal: string },
-  authorize: (project: FormalProject) => boolean | Promise<boolean>,
-  denialMessage = 'Workflow reopen is not authorized for the current Project'):
-    Promise<Record<string, unknown>> {
-    const ledger = this.requireProjectLedger()
-    const reason = input.reason.trim()
-    if (!reason || reason.length > 4000) throw new Error('Workflow node reopen reason must contain 1 to 4000 characters')
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      if (project === undefined || project.status !== 'open'
-        || project.intervention?.paused || !await authorize(project)) {
-        throw new Error(denialMessage)
-      }
-      if (input.expectedRevision !== undefined && project.revision !== input.expectedRevision) {
-        throw new Error('Workflow reopen revision conflict')
-      }
-      const steps = project.workflow?.steps
-      if (steps?.find(step => step.id === input.nodeId) === undefined) {
-        throw new Error('Project Workflow node not found')
-      }
-      const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-      const state = projectWorkflowState(project, work)
-      const latest = currentWorkflowWork(project, work).filter(item => item.workflowNodeId === input.nodeId)
-        .sort((a, b) => (b.workflowAttempt ?? 0) - (a.workflowAttempt ?? 0))[0]
-      const existing = (project.nodeReopens ?? []).find(item => item.workId === latest?.id)
-      if (existing !== undefined) {
-        if (existing.rootNodeId !== input.nodeId || existing.reason !== reason
-          || existing.reopenedBySessionId !== ('reopenedBySessionId' in actor ? actor.reopenedBySessionId : undefined)
-          || existing.reopenedByPrincipal !== ('reopenedByPrincipal' in actor ? actor.reopenedByPrincipal : undefined)) {
-          throw new Error('Workflow Work already has a different reopen')
-        }
-        return { project, reopens: (project.nodeReopens ?? []).filter(item => item.rootNodeId === input.nodeId
-          && item.reopenedAt === existing.reopenedAt), idempotentReplay: true }
-      }
-      const root = state.nodes.find(item => item.id === input.nodeId)
-      if (latest?.status !== 'completed' || (root?.status !== 'done' && root?.status !== 'waiting')) {
-        throw new Error('Workflow node reopen requires a completed current Work')
-      }
-      const affected = new Set([input.nodeId])
-      for (let changed = true; changed;) {
-        changed = false
-        for (const step of steps) {
-          if (!affected.has(step.id) && step.after.some(id => affected.has(id))) {
-            affected.add(step.id)
-            changed = true
-          }
-        }
-      }
-      const inFlight = state.nodes.filter(node => affected.has(node.id) && node.id !== input.nodeId
-        && node.status === 'running')
-      if (inFlight.length > 0) {
-        throw new Error(`Workflow descendants still have active Work: ${inFlight.map(node => node.id).join(', ')}`)
-      }
-      const now = nowIso()
-      const reopens = state.nodes.filter(node => affected.has(node.id)
-        && (node.status === 'done' || node.status === 'waiting'))
-        .map(node => ({
-          nodeId: node.id, workId: node.latestWorkId!, rootNodeId: input.nodeId, reason,
-          ...actor, reopenedAt: now,
-        }))
-      const next: FormalProject = {
-        ...project, nodeReopens: [...(project.nodeReopens ?? []), ...reopens],
-        revision: project.revision + reopens.length, updatedAt: now,
-      }
-      await ledger.put(next)
-      return { project: next, reopens }
-    })
-  }
-
-  async reviewProjectNode(agent: Agent, input: {
-    projectId: string; nodeId: string; workId: string
-    decision: 'approve' | 'rework'; reason: string
-  }): Promise<Record<string, unknown>> {
-    const binding = await this.requireDurableBinding(agent)
-    return this.decideProjectNodeReview(input, { reviewedBySessionId: String(agent.id) },
-      reviewerHome => reviewerHome === binding.homeAddress,
-      'only the assigned reviewer Home may review this Workflow node')
-  }
-
-  async reviewProjectNodeAsHuman(principal: string, input: {
-    projectId: string; nodeId: string; workId: string; expectedRevision: number
-    decision: 'approve' | 'rework'; reason: string
-  }, authorize: (principal: string, project: FormalProject, reviewerHome: string, nodeId: string) =>
-    boolean | Promise<boolean>): Promise<Record<string, unknown>> {
-    if (!principal.trim() || principal.length > 200) throw new Error('Workflow reviewer principal is invalid')
-    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
-      throw new Error('Workflow node review revision is invalid')
-    }
-    return this.decideProjectNodeReview(input, { reviewedByPrincipal: principal },
-      (reviewerHome, project, nodeId) => authorize(principal, project, reviewerHome, nodeId))
-  }
-
-  async reassignProjectNodeReviewerAsHuman(principal: string, input: {
-    projectId: string; nodeId: string; workId: string; expectedRevision: number
-    expectedPrincipal: string | null; assignedPrincipal: string; reason: string
-  }, authorizeManager: (principal: string, project: FormalProject) => boolean | Promise<boolean>,
-  authorizeTarget: (targetPrincipal: string, project: FormalProject,
-    reviewerHome: string, nodeId: string, workId: string) => boolean | Promise<boolean>):
-    Promise<Record<string, unknown>> {
-    if (!principal.trim() || principal.length > 200
-      || !input.assignedPrincipal.trim() || input.assignedPrincipal.length > 200) {
-      throw new Error('Workflow reviewer principal is invalid')
-    }
-    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
-      throw new Error('Workflow reviewer assignment revision is invalid')
-    }
-    const reason = input.reason.trim()
-    if (!reason || reason.length > 4000) {
-      throw new Error('Workflow reviewer assignment reason must contain 1 to 4000 characters')
-    }
-    const ledger = this.requireProjectLedger()
-    return ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      const step = project?.workflow?.steps.find(item => item.id === input.nodeId)
-      if (project === undefined || step === undefined || !await authorizeManager(principal, project)) {
-        throw new Error('Workflow reviewer reassignment is not authorized for the current Project')
-      }
-      if (project.revision !== input.expectedRevision) {
-        throw new Error('Workflow reviewer assignment revision conflict')
-      }
-      if (project.status !== 'open' || project.intervention?.paused) {
-        throw new Error('Workflow reviewer reassignment requires an unpaused open Project')
-      }
-      const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-      const node = projectWorkflowState(project, work).nodes.find(item => item.id === step.id)
-      if (node?.status !== 'waiting' || node.latestWorkId !== input.workId) {
-        throw new Error('Workflow reviewer reassignment requires the current pending Work result')
-      }
-      const result = work.find(item => item.id === input.workId)!
-      const gate = workReviewGate(step, result)
-      if (gate.mode !== 'reviewed') {
-        throw new Error('Workflow reviewer reassignment requires a reviewed Work result')
-      }
-      const previous = assignedNodeReviewer(project, input.workId)
-      if ((previous ?? null) !== input.expectedPrincipal) {
-        throw new Error('Workflow reviewer assignment changed; refresh the Project')
-      }
-      if (input.assignedPrincipal === previous
-        || !await authorizeTarget(input.assignedPrincipal, project,
-          gate.reviewerHome, step.id, input.workId)) {
-        throw new Error('Workflow reviewer target is not authorized for this node')
-      }
-      const at = nowIso()
-      const assignment = { nodeId: step.id, workId: input.workId,
-        reviewerHome: gate.reviewerHome,
-        ...(previous === undefined ? {} : { previousPrincipal: previous }),
-        assignedPrincipal: input.assignedPrincipal, assignedByPrincipal: principal,
-        reason, at }
-      const next: FormalProject = { ...project,
-        nodeReviewerAssignments: [...(project.nodeReviewerAssignments ?? []), assignment],
-        revision: project.revision + 1, updatedAt: at }
-      await ledger.put(next)
-      return { project: next, assignment }
-    })
-  }
-
-  async readProjectNodeReviewAsHuman(principal: string, projectId: string, nodeId: string,
-    authorize: (principal: string, project: FormalProject, reviewerHome: string, nodeId: string) =>
-      boolean | Promise<boolean>): Promise<{
-        canReview: boolean; revision: number; workId: string | null; work?: FormalWork
-      }> {
-    const project = this.requireProjectLedger().get(projectId)
-    const step = project?.workflow?.steps.find(item => item.id === nodeId)
-    if (!principal.trim() || project === undefined || step === undefined) {
-      throw new Error('Workflow reviewer is not authorized for the current node')
-    }
-    const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-    const state = projectWorkflowState(project, work).nodes.find(item => item.id === nodeId)
-    const pending = state?.status === 'waiting'
-      ? work.find(item => item.id === state.latestWorkId) : undefined
-    const currentProgression = project.progressionChanges?.at(-1)
-    if (pending === undefined && currentProgression?.mode === 'reviewed'
-      && !currentProgression.reviewers.some(item => item.nodeId === step.id)
-      && step.reviewer === undefined) {
-      throw new Error('Workflow reviewer is not authorized for the current node')
-    }
-    const gate = pending === undefined ? currentWorkflowReview(project, step)
-      : workReviewGate(step, pending)
-    if (gate.mode !== 'reviewed'
-      || !await authorize(principal, project, gate.reviewerHome, step.id)) {
-      throw new Error('Workflow reviewer is not authorized for the current node')
-    }
-    const assigned = state?.latestWorkId === undefined
-      ? undefined : assignedNodeReviewer(project, state.latestWorkId)
-    if (assigned !== undefined && assigned !== principal) {
-      throw new Error('Workflow reviewer is not authorized for the current node')
-    }
-    const canReview = project.status === 'open' && !project.intervention?.paused
-      && state?.status === 'waiting' && state.latestWorkId !== undefined
-    const latest = canReview ? pending : undefined
-    return { canReview: Boolean(canReview), revision: project.revision,
-      workId: canReview ? state!.latestWorkId! : null,
-      ...(latest === undefined ? {} : { work: latest }) }
-  }
-
-  async listPendingProjectNodeReviewsAsHuman(principal: string,
-    authorize: (principal: string, project: FormalProject, reviewerHome: string, nodeId: string) =>
-      boolean | Promise<boolean>, offset = 0, limit = 20): Promise<UiProjectNodeReviewInbox> {
-    if (!principal.trim() || principal.length > 200
-      || !Number.isSafeInteger(offset) || offset < 0
-      || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
-      throw new Error('Workflow reviewer inbox request is invalid')
-    }
-    const allWork = this.requireWorkLedger().list()
-    const workById = new Map(allWork.map(item => [item.id, item]))
-    const workByProject = new Map<string, FormalWork[]>()
-    for (const item of allWork) {
-      if (item.projectId) {
-        const projectWork = workByProject.get(item.projectId) ?? []
-        projectWork.push(item)
-        workByProject.set(item.projectId, projectWork)
-      }
-    }
-    const candidates: UiProjectNodeReviewInbox['items'] = []
-    for (const project of this.requireProjectLedger().list()) {
-      if (project.status !== 'open' || project.intervention?.paused || !project.workflow) continue
-      const work = workByProject.get(project.id) ?? []
-      const state = projectWorkflowState(project, work)
-      for (const node of state.nodes) {
-        if (node.status !== 'waiting' || !node.latestWorkId) continue
-        const step = project.workflow.steps.find(item => item.id === node.id)
-        const result = workById.get(node.latestWorkId)
-        if (!step || result?.status !== 'completed' || !result.resultMessageId) continue
-        const gate = workReviewGate(step, result)
-        if (gate.mode !== 'reviewed') continue
-        const assignedPrincipal = assignedNodeReviewer(project, result.id)
-        if (assignedPrincipal !== undefined && assignedPrincipal !== principal) continue
-        if (!await authorize(principal, project, gate.reviewerHome, step.id)) continue
-        candidates.push({ projectId: project.id, projectTitle: project.title,
-          revision: project.revision, nodeId: step.id, nodeTitle: step.title,
-          reviewCriteria: gate.criteria, reviewerHome: gate.reviewerHome,
-          workId: result.id, completedAt: result.completedAt!,
-          resultSubject: result.resultSubject!, resultBody: result.resultBody!,
-          resultArtifacts: (result.resultArtifacts ?? []).map(item => ({
-            path: item.path, sha256: item.sha256, bytes: item.bytes,
-          })), ...(assignedPrincipal === undefined ? {} : { assignedPrincipal }) })
-      }
-    }
-    candidates.sort((a, b) => b.completedAt.localeCompare(a.completedAt)
-      || a.projectId.localeCompare(b.projectId) || a.nodeId.localeCompare(b.nodeId))
-    return { items: candidates.slice(offset, offset + limit),
-      ...(offset + limit < candidates.length ? { nextOffset: offset + limit } : {}) }
-  }
-
-  private async decideProjectNodeReview(input: {
-    projectId: string; nodeId: string; workId: string; expectedRevision?: number
-    decision: 'approve' | 'rework'; reason: string
-  }, reviewer: { reviewedBySessionId: string } | { reviewedByPrincipal: string },
-  authorize: (reviewerHome: string, project: FormalProject,
-    nodeId: string) => boolean | Promise<boolean>,
-  denialMessage = 'Workflow reviewer is not authorized for the current node'):
-    Promise<Record<string, unknown>> {
-    const ledger = this.requireProjectLedger()
-    const reason = input.reason.trim()
-    if (!reason || reason.length > 4000) throw new Error('Workflow node review reason must contain 1 to 4000 characters')
-    const result = await ledger.withWrite(async () => {
-      const project = ledger.get(input.projectId)
-      const step = project?.workflow?.steps.find(item => item.id === input.nodeId)
-      const submitted = this.requireWorkLedger().get(input.workId)
-      if (project === undefined || step === undefined || submitted?.projectId !== project.id
-        || submitted.workflowNodeId !== step.id || submitted.status !== 'completed') {
-        throw new Error(denialMessage)
-      }
-      const gate = workReviewGate(step, submitted)
-      if (gate.mode !== 'reviewed'
-        || !await authorize(gate.reviewerHome, project, step.id)) throw new Error(denialMessage)
-      if (input.expectedRevision !== undefined && project.revision !== input.expectedRevision) {
-        throw new Error('Workflow node review revision conflict')
-      }
-      const assigned = assignedNodeReviewer(project, input.workId)
-      if (assigned !== undefined && (!('reviewedByPrincipal' in reviewer)
-        || reviewer.reviewedByPrincipal !== assigned)) {
-        throw new Error('Workflow reviewer is not authorized for the current node')
-      }
-      const previous = (project.nodeReviews ?? []).find(item => item.workId === input.workId)
-      if ((project.nodeReopens ?? []).some(item => item.workId === input.workId)) {
-        throw new Error('Workflow Work review was superseded by a node reopen')
-      }
-      if (previous !== undefined) {
-        if (previous.decision !== input.decision || previous.reason !== reason) {
-          throw new Error('Workflow Work already has a different review')
-        }
-        return { project, review: previous, idempotentReplay: true }
-      }
-      if (project.status !== 'open' || project.intervention?.paused) {
-        throw new Error('Workflow node review requires an unpaused open Project')
-      }
-      const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id
-        && item.workflowNodeId === step.id)
-      const latest = currentWorkflowWork(project, work)
-        .sort((a, b) => (b.workflowAttempt ?? 0) - (a.workflowAttempt ?? 0))[0]
-      if (latest?.id !== input.workId || latest.status !== 'completed' || latest.resultMessageId === undefined) {
-        throw new Error('Workflow node review requires the latest completed Work result')
-      }
-      if (projectWorkflowState(project, work).nodes.find(node => node.id === step.id)?.status !== 'waiting') {
-        throw new Error('Workflow node is not waiting for review')
-      }
-      if (input.decision === 'approve') await this.verifyWorkArtifacts(latest, true)
-      const review = {
-        nodeId: step.id, workId: latest.id, resultMessageId: latest.resultMessageId,
-        decision: input.decision, reason, reviewer: gate.reviewerHome,
-        ...reviewer, reviewedAt: nowIso(),
-      }
-      const next: FormalProject = {
-        ...project, nodeReviews: [...(project.nodeReviews ?? []), review],
-        revision: project.revision + 1, updatedAt: nowIso(),
-      }
-      await ledger.put(next)
-      return { project: next, review }
-    })
-    const notification = await this.deliverProjectNodeDecisionNotice(result.project, result.review)
-      .catch(error => {
-        this.recordRuntimeError(`Project node decision notice ${result.project.id}/${result.review.workId}`, error)
-        return 'pending' as const
-      })
-    return { ...result, notification }
-  }
-
-  /** A saved review is the outbox source, including after a crash between Project and Inbox writes. */
-  async reconcileProjectNodeDecisionNotifications(limit = 20): Promise<{
-    delivered: string[]; failed: Array<{ projectId: string; workId: string; error: unknown }>
-  }> {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid node decision notice limit')
-    const delivered: string[] = []
-    const failed: Array<{ projectId: string; workId: string; error: unknown }> = []
-    for (const project of this.requireProjectLedger().list()) {
-      if (project.status !== 'open') continue
-      for (const review of project.nodeReviews ?? []) {
-        if (!this.projectNodeDecisionCurrent(project, review.workId)) continue
-        if (delivered.length + failed.length >= limit) return { delivered, failed }
-        const id = stableId('project-node-decision', `${project.id}:${review.workId}`)
-        if (this.ledger.getInboxMessage(id) && this.ledger.getInboxDelivery(id, project.lead)) continue
-        try {
-          await this.deliverProjectNodeDecisionNotice(project, review)
-          delivered.push(id)
-        } catch (error) { failed.push({ projectId: project.id, workId: review.workId, error }) }
-      }
-    }
-    return { delivered, failed }
-  }
-
-  projectNodeDecisionCurrent(project: FormalProject, workId: string): boolean {
-    if (project.status !== 'open' || project.workflow === undefined) return false
-    const review = project.nodeReviews?.find(item => item.workId === workId)
-    if (review === undefined || (project.nodeReopens ?? []).some(item => item.workId === workId)
-      || project.nodeReviews?.findLast(item => item.nodeId === review.nodeId)?.workId !== workId) return false
-    const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-    return projectWorkflowState(project, work).nodes.find(node => node.id === review.nodeId)?.latestWorkId === workId
-  }
-
-  private async deliverProjectNodeDecisionNotice(project: FormalProject,
-    review: NonNullable<FormalProject['nodeReviews']>[number]): Promise<'delivered'> {
-    const id = stableId('project-node-decision', `${project.id}:${review.workId}`)
-    await this.ledger.withInboxWrite(async () => {
-      const existing = this.ledger.getInboxMessage(id)
-      if (existing !== undefined && (existing.projectNodeDecision?.projectId !== project.id
-        || existing.projectNodeDecision.workId !== review.workId
-        || existing.projectNodeDecision.lead !== project.lead)) {
-        throw new Error('Project node decision notice ID belongs to another review')
-      }
-      if (existing === undefined) {
-        const body = [
-          `Project: ${project.id}`,
-          `Workflow node: ${review.nodeId}`,
-          `Reviewed Work: ${review.workId}`,
-          `Decision: ${review.decision}`,
-          `Reason: ${review.reason}`,
-          review.decision === 'approve'
-            ? 'Read the current Project and Workflow. Continue ready nodes, or submit the final result when all nodes are done.'
-            : 'Read the current Project and Workflow. Rework this node using the review reason and dispatch a new Work attempt.',
-        ].join('\n')
-        const message: InboxMessage = {
-          schemaVersion: 1, id, idempotencyKey: `project-node-decision:${project.id}:${review.workId}`,
-          fromAddress: 'engine:inbox', to: [project.lead], cc: [], projectId: project.id,
-          projectNodeDecision: { projectId: project.id, workId: review.workId, lead: project.lead },
-          subject: `Project node ${review.nodeId}: ${review.decision === 'approve' ? 'approved' : 'rework requested'}`.slice(0, 200),
-          body, kind: 'project-node-decision', priority: 'urgent', contextRefs: [],
-          rootId: id, topicId: id, chain: 0, hop: 0, sentAt: review.reviewedAt,
-        }
-        await this.ledger.putInboxMessage(message)
-      }
-      if (this.ledger.getInboxDelivery(id, project.lead) === undefined) {
-        await this.ledger.putInboxDelivery({ schemaVersion: 1, messageId: id,
-          recipient: project.lead, status: 'delivered', wakePolicy: 'immediate',
-          wakeAt: review.reviewedAt, updatedAt: nowIso() })
-      }
-    })
-    return 'delivered'
-  }
-
   async submitProject(agent: Agent, input: {
     projectId: string; summary: string; body: string; doneWhenAssessment: string
     artifactRefs?: string[]
@@ -3905,18 +1915,10 @@ export class BizAgentService {
         }
         return { project, claim, idempotentReplay: true }
       }
-      if (project.status !== 'open' || project.intervention?.paused) {
-        throw new Error(`Project cannot submit from ${project.intervention?.paused ? 'paused' : project.status}`)
+      if (project.status !== 'open') {
+        throw new Error(`Project cannot submit from ${project.status}`)
       }
       const work = this.requireWorkLedger().list().filter(item => item.projectId === project.id)
-      if (project.workflow !== undefined) {
-        const workflow = projectWorkflowState(project, work)
-        const unfinished = workflow.nodes.filter(node => node.status !== 'done')
-        if (unfinished.length > 0) {
-          throw new Error(`Project Workflow nodes are unfinished: ${unfinished.map(node => node.id).join(', ')}`)
-        }
-        await this.verifyApprovedNodeArtifacts(project, work)
-      }
       const blockers = work.filter(item => item.status !== 'completed' && item.status !== 'cancelled')
       if (blockers.length > 0) {
         throw new Error(`Project has unsettled Work: ${blockers.map(item => item.id).join(', ')}`)
@@ -3930,12 +1932,6 @@ export class BizAgentService {
       const artifacts = []
       const snapshots = new ProjectSnapshotStore(this.store.root)
       for (const path of artifactRefs) {
-        const published = project.workingAssets?.findLast(item => item.path === path)
-        if (published !== undefined) {
-          await snapshots.read(published.sha256, published.bytes)
-          artifacts.push({ path, sha256: published.sha256, bytes: published.bytes, snapshot: true as const })
-          continue
-        }
         if (binding.cwd === undefined || agent.session.header.cwd === undefined
           || resolve(binding.cwd) !== resolve(agent.session.header.cwd)) {
           throw new Error('Project artifacts require the bound Session Workspace')
@@ -4061,10 +2057,6 @@ export class BizAgentService {
         throw new Error('Project review requires the current pending claim')
       }
       if (input.decision === 'accept') {
-        if (project.workflow !== undefined) {
-          await this.verifyApprovedNodeArtifacts(project,
-            this.requireWorkLedger().list().filter(item => item.projectId === project.id))
-        }
         const pending = this.requireWorkLedger().list().filter(item => item.projectId === project.id
           && item.status !== 'completed' && item.status !== 'cancelled')
         if (pending.length > 0) throw new Error('Project has unsettled Work since submission')
@@ -4187,10 +2179,6 @@ export class BizAgentService {
       if (project === undefined || project.lead !== binding.homeAddress) {
         throw new Error('linked Project must be open and led by the Work requester Home')
       }
-      if (project.intervention?.paused) throw new Error('linked Project is paused')
-      if (project.workflow !== undefined) {
-        throw new Error('Workflow Project Work must be dispatched through a defined node')
-      }
       if (project.status !== 'open') {
         const existingId = stableId('work', `${binding.homeAddress}:${input.idempotencyKey.trim()}`)
         if (this.requireWorkLedger().get(existingId)?.projectId !== projectId) {
@@ -4207,16 +2195,12 @@ export class BizAgentService {
     acceptanceCriteria: string
     idempotencyKey: string
     projectId?: string
-    requesterSeatAddress?: string
-    assigneeSeatAddress?: string
-    workflowNodeId?: string
-    workflowAttempt?: number
   }): Promise<Record<string, unknown>> {
     const ledger = this.requireWorkLedger()
     const binding = await this.requireDurableBinding(agent)
     const assignee = parseHomeAddress(input.toAddress)
-    if (assignee === binding.homeAddress && input.workflowNodeId === undefined) {
-      throw new Error('same-Home Work requires a Project Workflow node')
+    if (assignee === binding.homeAddress) {
+      throw new Error('Work assignee must be another Agent Home')
     }
     const target = this.store.getHome(assignee)
     if (target.status !== 'active') throw new Error(`Work assignee Home is not active: ${assignee}`)
@@ -4224,9 +2208,6 @@ export class BizAgentService {
     const acceptanceCriteria = input.acceptanceCriteria.trim()
     const idempotencyKey = input.idempotencyKey.trim()
     const projectId = input.projectId?.trim()
-    if (projectId !== undefined && this.projectExecutionPaused(projectId)) {
-      throw new Error('linked Project is paused')
-    }
     if (!goal || goal.length > 180) throw new Error('Work goal must contain 1 to 180 characters')
     if (!acceptanceCriteria || acceptanceCriteria.length > 4000) {
       throw new Error('Work acceptance criteria must contain 1 to 4000 characters')
@@ -4241,10 +2222,7 @@ export class BizAgentService {
       if (existing !== undefined) {
         if (existing.requester !== binding.homeAddress || existing.assignee !== assignee
           || existing.goal !== goal || existing.acceptanceCriteria !== acceptanceCriteria
-          || existing.projectId !== projectId || existing.workflowNodeId !== input.workflowNodeId
-          || existing.workflowAttempt !== input.workflowAttempt
-          || existing.requesterSeatAddress !== input.requesterSeatAddress
-          || existing.assigneeSeatAddress !== input.assigneeSeatAddress) {
+          || existing.projectId !== projectId) {
           throw new Error(`Work idempotency key conflicts with an existing request: ${idempotencyKey}`)
         }
         return existing
@@ -4260,12 +2238,6 @@ export class BizAgentService {
         requester: binding.homeAddress, assignee, returnToSessionId: String(agent.id),
         goal, acceptanceCriteria,
         ...(projectId !== undefined ? { projectId } : {}),
-        ...(input.requesterSeatAddress !== undefined ? { requesterSeatAddress: input.requesterSeatAddress } : {}),
-        ...(input.assigneeSeatAddress !== undefined ? { assigneeSeatAddress: input.assigneeSeatAddress } : {}),
-        ...(input.workflowNodeId !== undefined ? {
-          workflowNodeId: input.workflowNodeId, workflowAttempt: input.workflowAttempt,
-          workflowExecutionEpoch: this.requireProjectLedger().get(projectId!)?.intervention?.epoch ?? 0,
-        } : {}),
         status: 'open',
         requestMessageId: stableId('inbox', `${binding.homeAddress}:work:${id}:request`),
         autoStart: this.config.workspaceHomes.some(mapping => mapping.address === assignee),
@@ -4313,9 +2285,6 @@ export class BizAgentService {
       const current = ledger.get(workId)
       if (current === undefined) throw new Error(`Work not found: ${workId}`)
       if (current.assignee !== binding.homeAddress) throw new Error('only the Work assignee may accept it')
-      if (current.projectId !== undefined && this.projectExecutionPaused(current.projectId)) {
-        throw new Error('linked Project is paused')
-      }
       if (current.status === 'accepted' && current.workerSessionId === String(agent.id)) {
         return { work: current, idempotentReplay: true }
       }
@@ -4399,13 +2368,8 @@ export class BizAgentService {
   private async requireWorkOutputAccess(agent: Agent, workId: string): Promise<FormalWork> {
     const binding = await this.requireDurableBinding(agent)
     const work = this.requireWorkLedger().get(workId)
-    const project = work?.projectId === undefined ? undefined : this.projectLedger?.get(work.projectId)
-    const step = project?.workflow?.steps.find(item => item.id === work?.workflowNodeId)
-    const gate = work !== undefined && step !== undefined ? workReviewGate(step, work) : undefined
-    const assignedReviewer = gate?.mode === 'reviewed'
-      && gate.reviewerHome === binding.homeAddress
     if (work === undefined || (work.requester !== binding.homeAddress
-      && work.assignee !== binding.homeAddress && !assignedReviewer)) {
+      && work.assignee !== binding.homeAddress)) {
       throw new Error('Work artifact is not visible to current Home')
     }
     if (work.status !== 'completed') throw new Error('Work artifact requires a completed result')
@@ -4460,28 +2424,15 @@ export class BizAgentService {
     }
     if (!subject || subject.length > 200) throw new Error('Work result subject must contain 1 to 200 characters')
     if (!body || body.length > 15000) throw new Error('Work result body must contain 1 to 15000 characters')
-    const reserve = () => ledger.withWrite(async () => {
+    const reserved = await ledger.withWrite(async () => {
       const current = ledger.get(input.workId)
       if (current === undefined) throw new Error(`Work not found: ${input.workId}`)
       if (current.assignee !== binding.homeAddress) throw new Error('only the Work assignee may complete it')
-      if (current.projectId !== undefined && this.projectExecutionPaused(current.projectId)) {
-        throw new Error('linked Project is paused')
-      }
       if (current.status === 'cancelled') throw new Error('cancelled Work cannot be completed')
       if (current.status === 'open') throw new Error('Work must be accepted by this Session before completion')
       if (current.workerSessionId !== String(agent.id)) throw new Error('Work belongs to another worker Session')
       if (current.projectId !== undefined) await this.recordProjectTurn(agent, binding, current.projectId)
       if (current.status !== 'accepted') return current
-      const reviewGate = current.workflowNodeId === undefined ? undefined : (() => {
-        const project = this.requireProjectLedger().get(current.projectId!)
-        const step = project?.workflow?.steps.find(item => item.id === current.workflowNodeId)
-        if (!project || !step) throw new Error('Workflow review arrangement is unavailable')
-        const gate = currentWorkflowReview(project, step)
-        if (gate.mode === 'reviewed' && this.store.getHome(gate.reviewerHome).status !== 'active') {
-          throw new Error(`Workflow reviewer Home is not active: ${gate.reviewerHome}`)
-        }
-        return gate
-      })()
       const resultArtifacts: NonNullable<FormalWork['resultArtifacts']> = []
       const snapshots = new WorkSnapshotStore(this.store.root)
       for (const path of artifactRefs) {
@@ -4500,15 +2451,11 @@ export class BizAgentService {
         resultSubject: subject,
         resultBody: `Completed Work ${current.id}\n\n${body}`,
         resultArtifacts,
-        ...(reviewGate === undefined ? {} : { workflowReview: reviewGate }),
         resultSessionId: String(agent.id), updatedAt: now,
       }
       await ledger.put(next)
       return next
     })
-    const initial = ledger.get(input.workId)
-    const reserved = initial?.workflowNodeId !== undefined
-      ? await this.requireProjectLedger().withWrite(reserve) : await reserve()
     if (reserved.status === 'completed') return { work: reserved, alreadyCompleted: true }
     if (!reserved.resultSubject || !reserved.resultBody || !reserved.resultMessageId || !reserved.resultSessionId) {
       throw new Error('Work result reservation is incomplete')
@@ -4603,46 +2550,6 @@ export class BizAgentService {
       await ledger.put(next)
       return next
     })
-  }
-
-  private async verifyWorkArtifacts(work: FormalWork, requireCurrentSource: boolean): Promise<void> {
-    const snapshots = new WorkSnapshotStore(this.store.root)
-    const cwd = requireCurrentSource ? this.ledger.getBinding(work.workerSessionId ?? '')?.cwd : undefined
-    for (const artifact of work.resultArtifacts ?? []) {
-      await snapshots.read(artifact.sha256, artifact.bytes)
-      if (!requireCurrentSource) continue
-      if (cwd === undefined) throw new Error('Workflow node artifact source Workspace is unavailable')
-      let current: Awaited<ReturnType<typeof captureWorklogFile>>
-      try { current = await captureWorklogFile(cwd, artifact.path) }
-      catch { throw new Error(`Workflow node artifact changed or disappeared after Work completion: ${artifact.path}`) }
-      if (current.sha256 !== artifact.sha256 || current.bytes !== artifact.bytes) {
-        throw new Error(`Workflow node artifact changed after Work completion: ${artifact.path}`)
-      }
-    }
-  }
-
-  private async verifyApprovedNodeArtifacts(project: FormalProject, work: FormalWork[], nodeId?: string): Promise<void> {
-    const relevant = new Set<string>()
-    if (nodeId === undefined) {
-      for (const step of project.workflow?.steps ?? []) relevant.add(step.id)
-    } else {
-      const visit = (id: string): void => {
-        for (const dependency of project.workflow?.steps.find(step => step.id === id)?.after ?? []) {
-          if (!relevant.has(dependency)) { relevant.add(dependency); visit(dependency) }
-        }
-      }
-      visit(nodeId)
-    }
-    const reopened = new Set((project.nodeReopens ?? []).map(item => item.workId))
-    const activeWorkIds = new Set(currentWorkflowWork(project, work).map(item => item.id))
-    for (const review of project.nodeReviews ?? []) {
-      if (review.decision !== 'approve' || !relevant.has(review.nodeId)
-        || reopened.has(review.workId) || !activeWorkIds.has(review.workId)) continue
-      const result = work.find(item => item.id === review.workId)
-      if (result?.status !== 'completed') throw new Error(`approved Workflow Work is unavailable: ${review.nodeId}`)
-      try { await this.verifyWorkArtifacts(result, true) }
-      catch (error) { throw new Error(`approved Workflow node ${review.nodeId} is stale: ${errorMessage(error)}`) }
-    }
   }
 
   private requireWorkNotification(notification: Record<string, unknown>, messageId: string,
@@ -5920,131 +3827,6 @@ function projectVisibleToHome(project: FormalProject, homeAddress: HomeAddress):
     seat.homeAddress === homeAddress && seat.status === 'active')
 }
 
-function retainedProjectNodeIds(oldSteps: ProjectWorkflow['steps'], nextSteps: ProjectWorkflow['steps'],
-  restartNodeIds: string[], done: Set<string>): Set<string> {
-  const oldById = new Map(oldSteps.map(step => [step.id, step]))
-  const nextById = new Map(nextSteps.map(step => [step.id, step]))
-  for (const id of restartNodeIds) {
-    if (!oldById.has(id) && !nextById.has(id)) throw new Error(`Workflow restart node is unknown: ${id}`)
-  }
-  const invalid = new Set<string>(restartNodeIds)
-  for (const step of oldSteps) {
-    if (!nextById.has(step.id) || !done.has(step.id)) invalid.add(step.id)
-  }
-  for (const step of nextSteps) if (!done.has(step.id)) invalid.add(step.id)
-  for (let changed = true; changed;) {
-    changed = false
-    for (const step of [...oldSteps, ...nextSteps]) {
-      if (!invalid.has(step.id) && step.after.some(id => invalid.has(id))) {
-        invalid.add(step.id)
-        changed = true
-      }
-    }
-  }
-  return new Set(nextSteps.filter(step => !invalid.has(step.id)).map(step => step.id))
-}
-
-function currentWorkflowWork(project: FormalProject, work: FormalWork[]): FormalWork[] {
-  const rebuild = project.workflowAmendments?.findLast(item => item.mode === 'rebuild')
-  if (rebuild === undefined) return work
-  const retainedWorkIds = new Set(rebuild.retained?.map(item => item.workId) ?? [])
-  return work.filter(item => retainedWorkIds.has(item.id)
-    || (item.workflowExecutionEpoch ?? 0) >= rebuild.executionEpoch!)
-}
-
-function assignedNodeReviewer(project: FormalProject, workId: string): string | undefined {
-  return project.nodeReviewerAssignments?.findLast(item => item.workId === workId)?.assignedPrincipal
-}
-
-function currentWorkflowReview(project: FormalProject,
-  step: NonNullable<FormalProject['workflow']>['steps'][number]): NonNullable<FormalWork['workflowReview']> {
-  const change = project.progressionChanges?.at(-1)
-  const progressionRevision = change?.revision ?? 0
-  if (change?.mode === 'automatic') return { mode: 'automatic', progressionRevision }
-  const reviewerHome = change?.mode === 'reviewed'
-    ? change.reviewers.find(item => item.nodeId === step.id)?.reviewerHome ?? step.reviewer
-    : step.reviewer
-  if (reviewerHome === undefined) {
-    if (change?.mode === 'reviewed') throw new Error(`Workflow node ${step.id} has no progression reviewer`)
-    return { mode: 'automatic', progressionRevision }
-  }
-  return { mode: 'reviewed', progressionRevision, reviewerHome,
-    criteria: step.reviewCriteria ?? step.acceptanceCriteria }
-}
-
-function workReviewGate(step: NonNullable<FormalProject['workflow']>['steps'][number],
-  work: FormalWork): NonNullable<FormalWork['workflowReview']> {
-  // Work completed before progression support retains its frozen Workflow reviewer.
-  return work.workflowReview ?? (step.reviewer === undefined
-    ? { mode: 'automatic', progressionRevision: 0 }
-    : { mode: 'reviewed', progressionRevision: 0,
-      reviewerHome: step.reviewer, criteria: step.reviewCriteria ?? step.acceptanceCriteria })
-}
-
-function projectWorkflowState(project: FormalProject, work: FormalWork[]): {
-  nodes: Array<{
-    id: string; title: string; executor: string; after: string[]
-    status: 'pending' | 'ready' | 'running' | 'waiting' | 'done'
-    attempts: number; latestWorkId?: string; latestWorkStatus?: FormalWork['status']
-  }>
-  readyNodeIds: string[]
-} {
-  const workflow = project.workflow
-  if (workflow === undefined) throw new Error('Project has no frozen Workflow')
-  const byId = new Map(workflow.steps.map(step => [step.id, step]))
-  const latestWork = new Map<string, FormalWork>()
-  const attempts = new Map<string, number>()
-  for (const item of work) {
-    if (item.workflowNodeId === undefined) continue
-    attempts.set(item.workflowNodeId, (attempts.get(item.workflowNodeId) ?? 0) + 1)
-  }
-  for (const item of currentWorkflowWork(project, work)) {
-    if (item.workflowNodeId === undefined) continue
-    const previous = latestWork.get(item.workflowNodeId)
-    if (previous === undefined || (item.workflowAttempt ?? 0) > (previous.workflowAttempt ?? 0)) {
-      latestWork.set(item.workflowNodeId, item)
-    }
-  }
-  const retainedWorkIds = new Set(project.workflowAmendments?.findLast(item => item.mode === 'rebuild')
-    ?.retained?.map(item => item.workId) ?? [])
-  const states = new Map<string, 'pending' | 'ready' | 'running' | 'waiting' | 'done'>()
-  const statusFor = (id: string): 'pending' | 'ready' | 'running' | 'waiting' | 'done' => {
-    const existing = states.get(id)
-    if (existing !== undefined) return existing
-    const latest = latestWork.get(id)
-    if (latest?.status === 'completed' && !(project.nodeReopens ?? []).some(item => item.workId === latest.id)) {
-      const step = byId.get(id)
-      const review = (project.nodeReviews ?? []).find(item => item.workId === latest.id)
-      const gate = step === undefined ? undefined : workReviewGate(step, latest)
-      if (retainedWorkIds.has(latest.id) || gate?.mode === 'automatic' || review?.decision === 'approve') {
-        states.set(id, 'done')
-        return 'done'
-      }
-      if (review === undefined) {
-        states.set(id, 'waiting')
-        return 'waiting'
-      }
-    }
-    if (latest !== undefined && latest.status !== 'cancelled' && latest.status !== 'completed') {
-      states.set(id, 'running')
-      return 'running'
-    }
-    const ready = byId.get(id)?.after.every(dependency => statusFor(dependency) === 'done') ?? false
-    const status = ready ? 'ready' : 'pending'
-    states.set(id, status)
-    return status
-  }
-  const nodes = workflow.steps.map(step => {
-    const latest = latestWork.get(step.id)
-    return {
-      id: step.id, title: step.title, executor: step.executor, after: step.after,
-      status: statusFor(step.id), attempts: attempts.get(step.id) ?? 0,
-      ...(latest !== undefined ? { latestWorkId: latest.id, latestWorkStatus: latest.status } : {}),
-    }
-  })
-  return { nodes, readyNodeIds: nodes.filter(node => node.status === 'ready').map(node => node.id) }
-}
-
 function workCallMatches(event: Extract<SessionEvent, { type: 'tool/call' }>, workId: string): boolean {
   try { return (JSON.parse(event.data.arguments) as { work_id?: unknown }).work_id === workId }
   catch { return false }
@@ -6190,16 +3972,6 @@ function checkedProjectArtifactPath(path: string): string {
   return checkedArtifactPath(path, 'Project')
 }
 
-function checkedProjectWorkingPath(path: string): string {
-  let value: string
-  try { value = checkedWorklogPath(path) }
-  catch { throw new Error('Project working asset path must be canonical under artifacts/, context/, or decisions.md') }
-  if (value !== 'decisions.md' && !value.startsWith('artifacts/') && !value.startsWith('context/')) {
-    throw new Error('Project working asset path must be canonical under artifacts/, context/, or decisions.md')
-  }
-  return value
-}
-
 function checkedWorkArtifactPath(path: string): string {
   return checkedArtifactPath(path, 'Work')
 }
@@ -6254,9 +4026,7 @@ async function captureWorklogFile(cwd: string, path: string): Promise<{
 }
 
 function workRequestNotice(work: FormalWork): InboxSendInput {
-  const projectContext = work.projectId === undefined ? ''
-    : `\n\nProject: ${work.projectId}${work.assigneeSeatAddress === undefined ? ''
-      : `\nYour Project Seat: ${work.assigneeSeatAddress}\nRead the Project with bizagent_project_read before working.`}`
+  const projectContext = work.projectId === undefined ? '' : `\n\nProject: ${work.projectId}`
   return {
     to: [work.assignee], subject: `Formal Work: ${work.goal}`,
     body: `Formal Work ${work.id}${projectContext}\n\nGoal: ${work.goal}\n\nAcceptance criteria:\n${work.acceptanceCriteria}\n\nComplete with bizagent_work_complete. An Inbox reply does not complete this Work.`,

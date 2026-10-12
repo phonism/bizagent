@@ -30,8 +30,7 @@ let project = {
   }], currentClaimId: 'claim-1', reviews: [], seats: [],
 }
 const api = {
-  async projects() { return { homeAddress: 'business:search', projects: [project],
-    progress: { 'project-demo': undefined } } },
+  async projects() { return { homeAddress: 'business:search', projects: [project] } },
   async projectDetail() { return { project, work: [] } },
   async projectReviewAccess() { return { canReview: project.status === 'awaiting_acceptance',
     revision: project.revision, claimId: project.currentClaimId } },

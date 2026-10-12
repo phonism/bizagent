@@ -4,11 +4,6 @@ import {
   BIZAGENT_PROJECT_REVIEW_API,
   BIZAGENT_LOCAL_HUMAN_STATUS_API,
   BIZAGENT_AGENT_SESSION_API,
-  BIZAGENT_PROJECT_DELIVERY_FEEDBACK_API,
-  BIZAGENT_PROJECT_ROLE_ASSIGNMENTS_API,
-  BIZAGENT_PROJECT_NODE_REVIEW_API,
-  BIZAGENT_PROJECT_INTERVENTION_API,
-  BIZAGENT_PROJECT_PLAN_API,
   BIZAGENT_FRAME_STATUS_API,
   BIZAGENT_HUMAN_INBOX_API,
   type UiAgentDirectory,
@@ -24,14 +19,7 @@ import {
   type UiProjectList,
   type UiProjectDetail,
   type UiProjectReviewAccess,
-  type UiProjectDeliveryFeedbackAccess,
-  type UiProjectRoleAssignmentAccess,
   type UiProjectOutcomeReviewInbox,
-  type UiProjectNodeReviewAccess,
-  type UiProjectNodeReviewInbox,
-  type UiProjectInterventionAccess,
-  type UiProjectPlanAccess,
-  type UiProjectPlanAction,
   type UiProposalDecisionRequest,
   type UiHumanInboxList,
   type UiHumanInboxDetail,
@@ -79,37 +67,12 @@ export interface BizAgentUiPort {
   projects(sessionId: string, beforeProjectId?: string, signal?: AbortSignal): Promise<UiProjectList>
   projectDetail(sessionId: string, projectId: string, signal?: AbortSignal): Promise<UiProjectDetail>
   projectReviewAccess?(projectId: string, signal?: AbortSignal): Promise<UiProjectReviewAccess | undefined>
-  projectDeliveryFeedbackAccess?(projectId: string,
-    signal?: AbortSignal): Promise<UiProjectDeliveryFeedbackAccess | undefined>
-  projectRoleAssignmentsAccess?(projectId: string, roleHome?: string,
-    signal?: AbortSignal): Promise<UiProjectRoleAssignmentAccess | undefined>
-  decideProjectRoleAsHuman?(input: { projectId: string; roleHome: string;
-    action: 'assign' | 'clear' | 'reject'; targetPrincipal?: string; suggestionId?: string;
-    expectedProjectRevision: number; expectedBindingRevision: number;
-    idempotencyKey: string; reason: string }): Promise<unknown>
-  commentProjectDeliveryAsHuman?(input: { projectId: string; path: string;
-    version: 'working' | 'submitted'; expectedSha256: string; expectedProjectRevision: number;
-    idempotencyKey: string; section?: string; body: string }): Promise<unknown>
   projectOutcomeReviewInbox?(offset?: number,
     signal?: AbortSignal): Promise<UiProjectOutcomeReviewInbox | undefined>
   reviewProjectAsHuman?(input: { projectId: string; claimId: string; expectedRevision: number;
     decision: 'accept' | 'rework'; reason: string }): Promise<unknown>
   downloadProjectReviewArtifact?(input: { projectId: string; claimId: string;
     artifactPath: string; workId?: string }): Promise<Blob>
-  projectNodeReviewAccess?(projectId: string, nodeId: string,
-    signal?: AbortSignal): Promise<UiProjectNodeReviewAccess | undefined>
-  projectNodeReviewInbox?(offset?: number,
-    signal?: AbortSignal): Promise<UiProjectNodeReviewInbox | undefined>
-  reviewProjectNodeAsHuman?(input: { projectId: string; nodeId: string; workId: string;
-    expectedRevision: number; decision: 'approve' | 'rework'; reason: string }): Promise<unknown>
-  projectInterventionAccess?(projectId: string,
-    signal?: AbortSignal): Promise<UiProjectInterventionAccess | undefined>
-  projectInterventionAsHuman?(input: { action: 'pause'; projectId: string;
-    expectedRevision: number; reason: string } | { action: 'resume'; projectId: string;
-    expectedRevision: number }): Promise<unknown>
-  projectPlanAccess?(projectId: string, signal?: AbortSignal,
-    nodeId?: string): Promise<UiProjectPlanAccess | undefined>
-  projectPlanActionAsHuman?(input: UiProjectPlanAction): Promise<unknown>
 }
 
 export class BizAgentUiHttpError extends Error {
@@ -310,42 +273,6 @@ export class BizAgentUiHttpPort implements BizAgentUiPort {
     return parseResponse(response)
   }
 
-  async projectDeliveryFeedbackAccess(projectId: string,
-    signal?: AbortSignal): Promise<UiProjectDeliveryFeedbackAccess | undefined> {
-    const query = new URLSearchParams({ projectId })
-    const response = await fetch(`${BIZAGENT_PROJECT_DELIVERY_FEEDBACK_API}?${query}`, {
-      cache: 'no-store', credentials: 'same-origin',
-      ...(signal === undefined ? {} : { signal }),
-    })
-    if ([401, 403, 404].includes(response.status)) return undefined
-    return parseResponse(response)
-  }
-
-  commentProjectDeliveryAsHuman(input: { projectId: string; path: string;
-    version: 'working' | 'submitted'; expectedSha256: string; expectedProjectRevision: number;
-    idempotencyKey: string; section?: string; body: string }): Promise<unknown> {
-    return post(BIZAGENT_PROJECT_DELIVERY_FEEDBACK_API, input)
-  }
-
-  async projectRoleAssignmentsAccess(projectId: string, roleHome?: string,
-    signal?: AbortSignal): Promise<UiProjectRoleAssignmentAccess | undefined> {
-    const query = new URLSearchParams({ projectId,
-      ...(roleHome === undefined ? {} : { roleHome }) })
-    const response = await fetch(`${BIZAGENT_PROJECT_ROLE_ASSIGNMENTS_API}?${query}`, {
-      cache: 'no-store', credentials: 'same-origin',
-      ...(signal === undefined ? {} : { signal }),
-    })
-    if ([401, 403, 404].includes(response.status)) return undefined
-    return parseResponse(response)
-  }
-
-  decideProjectRoleAsHuman(input: { projectId: string; roleHome: string;
-    action: 'assign' | 'clear' | 'reject'; targetPrincipal?: string; suggestionId?: string;
-    expectedProjectRevision: number; expectedBindingRevision: number;
-    idempotencyKey: string; reason: string }): Promise<unknown> {
-    return post(BIZAGENT_PROJECT_ROLE_ASSIGNMENTS_API, input)
-  }
-
   async projectOutcomeReviewInbox(offset = 0,
     signal?: AbortSignal): Promise<UiProjectOutcomeReviewInbox | undefined> {
     const query = new URLSearchParams({ inbox: '1', offset: String(offset) })
@@ -372,58 +299,6 @@ export class BizAgentUiHttpPort implements BizAgentUiPort {
     })
     if (!response.ok) throw new BizAgentUiHttpError(`Project artifact download failed (${response.status})`, response.status)
     return response.blob()
-  }
-  async projectNodeReviewAccess(projectId: string, nodeId: string,
-    signal?: AbortSignal): Promise<UiProjectNodeReviewAccess | undefined> {
-    const query = new URLSearchParams({ projectId, nodeId })
-    const response = await fetch(`${BIZAGENT_PROJECT_NODE_REVIEW_API}?${query}`, {
-      cache: 'no-store', credentials: 'same-origin',
-      ...(signal === undefined ? {} : { signal }),
-    })
-    if ([401, 403, 404].includes(response.status)) return undefined
-    return parseResponse(response)
-  }
-  async projectNodeReviewInbox(offset = 0,
-    signal?: AbortSignal): Promise<UiProjectNodeReviewInbox | undefined> {
-    const query = new URLSearchParams({ inbox: '1', offset: String(offset) })
-    const response = await fetch(`${BIZAGENT_PROJECT_NODE_REVIEW_API}?${query}`, {
-      cache: 'no-store', credentials: 'same-origin',
-      ...(signal === undefined ? {} : { signal }),
-    })
-    if ([401, 403, 404].includes(response.status)) return undefined
-    return parseResponse(response)
-  }
-  reviewProjectNodeAsHuman(input: { projectId: string; nodeId: string; workId: string;
-    expectedRevision: number; decision: 'approve' | 'rework'; reason: string }): Promise<unknown> {
-    return post(BIZAGENT_PROJECT_NODE_REVIEW_API, input)
-  }
-  async projectInterventionAccess(projectId: string,
-    signal?: AbortSignal): Promise<UiProjectInterventionAccess | undefined> {
-    const query = new URLSearchParams({ projectId })
-    const response = await fetch(`${BIZAGENT_PROJECT_INTERVENTION_API}?${query}`, {
-      cache: 'no-store', credentials: 'same-origin',
-      ...(signal === undefined ? {} : { signal }),
-    })
-    if ([401, 403, 404].includes(response.status)) return undefined
-    return parseResponse(response)
-  }
-  projectInterventionAsHuman(input: { action: 'pause'; projectId: string;
-    expectedRevision: number; reason: string } | { action: 'resume'; projectId: string;
-    expectedRevision: number }): Promise<unknown> {
-    return post(BIZAGENT_PROJECT_INTERVENTION_API, input)
-  }
-  async projectPlanAccess(projectId: string,
-    signal?: AbortSignal, nodeId?: string): Promise<UiProjectPlanAccess | undefined> {
-    const query = new URLSearchParams({ projectId, ...(nodeId === undefined ? {} : { nodeId }) })
-    const response = await fetch(`${BIZAGENT_PROJECT_PLAN_API}?${query}`, {
-      cache: 'no-store', credentials: 'same-origin',
-      ...(signal === undefined ? {} : { signal }),
-    })
-    if ([401, 403, 404].includes(response.status)) return undefined
-    return parseResponse(response)
-  }
-  projectPlanActionAsHuman(input: UiProjectPlanAction): Promise<unknown> {
-    return post(BIZAGENT_PROJECT_PLAN_API, input)
   }
 }
 

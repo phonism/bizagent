@@ -60,12 +60,9 @@ export class InboxWakeRunner {
       for (const message of messages) {
         if (planned.length >= limit) break
         if (message.kind !== 'ordinary' || closedTopics.has(message.topicId ?? message.rootId)) continue
-        if (message.projectId !== undefined && this.service.projectExecutionPaused(message.projectId)
-          && !message.to.some(recipient => this.service.projectHumanAnswerMessage(message, recipient))) continue
         for (const recipient of message.to) {
           if (planned.length >= limit) break
           if (isUserAddress(recipient)) continue
-          if (this.service.projectLeadWakeBlocked(message, recipient)) continue
           const delivery = this.service.ledger.getInboxDelivery(message.id, recipient)
           if (delivery?.status !== 'delivered' || delivery.handledAt !== undefined
             || delivery.nudgedAt !== undefined) continue
@@ -136,7 +133,6 @@ export class InboxWakeRunner {
           ? [plan.recipient] : []
       }))
       const pending = plans.find(plan => plan.dispatchedAt === undefined
-        && !this.projectWakePaused(plan)
         && (!busyRecipients.has(plan.recipient) || this.handles.has(plan.id))
         && (this.retryAfter.get(plan.id) ?? 0) <= now)
       if (pending) return pending
@@ -144,9 +140,7 @@ export class InboxWakeRunner {
       const allMessages = this.service.ledger.listInboxMessages()
       const closedTopics = closedInboxTopics(allMessages)
       const messages = allMessages
-        .filter(message => message.kind === 'ordinary' || message.kind === 'project-progression'
-          || message.kind === 'project-node-decision' || message.kind === 'project-outcome-rework'
-          || message.kind === 'project-delivery-feedback')
+        .filter(message => message.kind === 'ordinary' || message.kind === 'project-outcome-rework')
         .sort((a, b) => a.sentAt.localeCompare(b.sentAt) || a.id.localeCompare(b.id))
       for (const first of messages) {
         for (const recipient of first.to) {
@@ -189,10 +183,6 @@ export class InboxWakeRunner {
 
   private eligible(message: InboxMessage, recipient: HomeAddress | ProjectSeatAddress, now: number,
     closedTopics: ReadonlySet<string>, includePending = false): boolean {
-    if (this.service.projectSeatPaused(recipient)
-      || this.service.projectLeadWakeBlocked(message, recipient)
-      || (message.projectId !== undefined && this.service.projectExecutionPaused(message.projectId)
-        && !this.service.projectHumanAnswerMessage(message, recipient))) return false
     const due = this.dueAt(message, recipient)
     if ((!includePending && due > now) || !message.to.includes(recipient)
       || closedTopics.has(message.topicId ?? message.rootId)) return false
@@ -221,7 +211,6 @@ export class InboxWakeRunner {
 
   private async activate(plan: InboxWakePlan): Promise<'started' | 'skipped'> {
     if (this.closing) return 'skipped'
-    if (this.projectWakePaused(plan)) throw new Error('Project Inbox wake is paused')
     const current = this.service.ledger.getInboxWakePlan(plan.id)
     if (current?.dispatchedAt !== undefined) return 'skipped'
     if (current === undefined) throw new Error(`Inbox wake plan disappeared: ${plan.id}`)
@@ -242,17 +231,13 @@ export class InboxWakeRunner {
     }
     for (const id of plan.messageIds) {
       const message = this.service.ledger.getInboxMessage(id)
-      if ((message?.kind !== 'ordinary' && message?.kind !== 'project-progression'
-        && message?.kind !== 'project-node-decision' && message?.kind !== 'project-outcome-rework'
-        && message?.kind !== 'project-delivery-feedback')
+      if ((message?.kind !== 'ordinary' && message?.kind !== 'project-outcome-rework')
         || !message.to.includes(plan.recipient)
         || ((plan.scope ?? 'topic') === 'topic' && (message.topicId ?? message.rootId) !== plan.topicId)
         || this.service.ledger.getInboxDelivery(id, plan.recipient)?.status !== 'delivered') {
         throw new Error(`Inbox wake source is not delivered to its recipient: ${id}`)
       }
-      if ((message.projectProgression || message.projectNodeDecision || message.projectOutcomeRework
-        || message.projectDeliveryFeedback)
-        && !this.isProjectNotice(message, plan.recipient)) {
+      if (message.projectOutcomeRework && !this.isProjectNotice(message, plan.recipient)) {
         await this.service.ledger.markInboxWakeDispatched(plan.id, nowIso())
         return 'skipped'
       }
@@ -333,16 +318,6 @@ export class InboxWakeRunner {
     return 'started'
   }
 
-  private projectWakePaused(plan: InboxWakePlan): boolean {
-    return this.service.projectSeatPaused(plan.recipient)
-      || plan.messageIds.some(id => {
-        const message = this.service.ledger.getInboxMessage(id)
-        return message !== undefined && (this.service.projectLeadWakeBlocked(message, plan.recipient)
-          || (message.projectId !== undefined && this.service.projectExecutionPaused(message.projectId)
-            && !this.service.projectHumanAnswerMessage(message, plan.recipient)))
-      })
-  }
-
   private eligibleOwner(message: InboxMessage, recipient: HomeAddress | ProjectSeatAddress): boolean {
     const home = this.service.inboxAddressHome(recipient)
     if (home === undefined) return false
@@ -356,14 +331,7 @@ export class InboxWakeRunner {
   }
 
   private senderOwner(message: InboxMessage): string | undefined {
-    const humanProject = message.projectId === undefined ? undefined
-      : this.service.projectLedger?.get(message.projectId)
-    if (humanProject !== undefined
-      && this.service.projectHumanAnswerMessage(message, humanProject.lead)) {
-      return this.service.store.getHome(humanProject.lead).owner
-    }
-    const projectNotice = message.projectProgression ?? message.projectNodeDecision
-      ?? message.projectOutcomeRework ?? message.projectDeliveryFeedback
+    const projectNotice = message.projectOutcomeRework
     if (projectNotice !== undefined) {
       if (!this.isProjectNotice(message, projectNotice.lead as HomeAddress)) return undefined
       return this.service.store.getHome(projectNotice.lead).owner
@@ -376,26 +344,14 @@ export class InboxWakeRunner {
 
   private isProjectNotice(message: InboxMessage,
     recipient: HomeAddress | ProjectSeatAddress): boolean {
-    const progression = message.projectProgression
-    const decision = message.projectNodeDecision
     const rework = message.projectOutcomeRework
-    const feedback = message.projectDeliveryFeedback
-    const notice = progression ?? decision ?? rework ?? feedback
-    const project = notice === undefined ? undefined : this.service.projectLedger?.get(notice.projectId)
-    return notice !== undefined && project !== undefined
-      && (feedback !== undefined
-        ? project.status === 'open' || project.status === 'awaiting_acceptance'
-        : project.status === 'open')
-      && project.lead === recipient
-      && notice.lead === recipient && (progression !== undefined
-        ? project.progressionChanges?.at(-1)?.revision === progression.revision
-        : decision !== undefined
-          ? this.service.projectNodeDecisionCurrent(project, decision.workId)
-          : rework !== undefined ? project.currentClaimId === rework.claimId
-            && project.reviews.some(review => review.claimId === rework.claimId
-              && review.decision === 'rework')
-            : feedback !== undefined && project.deliveryFeedback?.some(item => item.id === feedback.feedbackId
-              && item.resolution === undefined) === true)
+    const project = rework === undefined ? undefined : this.service.projectLedger?.get(rework.projectId)
+    return rework !== undefined && project !== undefined
+      && project.status === 'open'
+      && project.lead === recipient && rework.lead === recipient
+      && project.currentClaimId === rework.claimId
+      && project.reviews.some(review => review.claimId === rework.claimId
+        && review.decision === 'rework')
   }
 
   private awaitingReturnRoute(message: InboxMessage, recipient: HomeAddress | ProjectSeatAddress): boolean {

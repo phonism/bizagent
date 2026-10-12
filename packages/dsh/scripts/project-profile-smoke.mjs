@@ -4,7 +4,7 @@ import { createServer } from 'node:http'
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { HomeStore } from '../lib/home-store.js'
 import { stableId } from '../lib/domain.js'
 import { projectMainSessionId } from '../lib/agent-session-address.js'
@@ -12,9 +12,7 @@ import { projectMainSessionId } from '../lib/agent-session-address.js'
 const packageRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const root = await mkdtemp(join(await realpath(tmpdir()), 'bizagent-dsh-project-'))
 const projectId = stableId('project', 'personal:default:smoke-project')
-const workflowProjectId = stableId('project', 'personal:default:smoke-workflow-plan')
-const crashProjectId = stableId('project', 'personal:default:smoke-crash-pause')
-const crashWorkIds = ['first', 'second'].map(key => stableId('work', `personal:default:smoke-crash-${key}`))
+const projectWorkId = stableId('work', 'personal:default:smoke-project-work')
 const seatAddress = `seat:${projectId}:${stableId('seat', 'role:analyst')}`
 const requestId = stableId('inbox', 'personal:default:smoke-seat-request')
 const replyId = stableId('inbox', 'role:analyst:smoke-seat-reply')
@@ -26,15 +24,11 @@ let workerReplied = false
 let workerFinished = false
 let leadReadReply = false
 let restartStage = 0
-let planStage = 0
-let planRestoreStage = 0
-let crashStage = 0
-let crashRestoreStage = 0
-
-const collectStep = { id: 'collect', title: 'Collect evidence', intent: 'Collect source evidence.',
-  executor: 'personal:default', acceptance_criteria: 'Return source evidence.', after: [] }
-const auditStep = { id: 'audit', title: 'Audit evidence', intent: 'Check the source evidence.',
-  executor: 'role:analyst', acceptance_criteria: 'Return an audit.', after: ['collect'] }
+let submitStage = 0
+let submitRestoreStage = 0
+let workStage = 0
+let workCompleted = false
+let projectSubmitted = false
 
 function call(name, args, id) {
   return { role: 'assistant', tool_calls: [{ index: 0, id, type: 'function',
@@ -74,10 +68,9 @@ const server = createServer(async (req, res) => {
     const isCompaction = messages.some(message => message.role === 'user'
       && String(message.content).includes('You are now acting as a compaction engine'))
     const isRestart = JSON.stringify(messages).includes('Read the persisted Project after restart')
-    const isPlan = JSON.stringify(messages).includes('Create and amend an audited Workflow plan')
-    const isPlanRestore = JSON.stringify(messages).includes('Read the amended Workflow after restart')
-    const isCrash = JSON.stringify(messages).includes('Create a Project and crash during its pause')
-    const isCrashRestore = JSON.stringify(messages).includes('Read the paused Project after a crash')
+    const isSubmit = JSON.stringify(messages).includes('Dispatch formal Project Work and submit the result')
+    const isSubmitRestore = JSON.stringify(messages).includes('Read the submitted Project after restart')
+    const isWorkWorker = JSON.stringify(messages).includes('# Formal Work assigned to this Agent Home')
     const isWorker = JSON.stringify(messages).includes('# Pending Inbox for this Agent Home')
     const results = messages.filter(message => message.role === 'tool')
     const latest = results.at(-1) === undefined ? undefined : JSON.parse(String(results.at(-1).content))
@@ -120,126 +113,88 @@ const server = createServer(async (req, res) => {
         emit({ role: 'assistant', content: 'Project Seat restart verified.' })
         emit({}, 'stop')
       }
-    } else if (isCrashRestore) {
-      const stage = crashRestoreStage++
+    } else if (isSubmitRestore) {
+      const stage = submitRestoreStage++
       if (stage === 0) {
-        emit(call('bizagent_project_read', { project_id: crashProjectId }, 'crash-restart-read'))
-        emit({}, 'tool_calls')
-      } else if (stage === 1) {
-        assert.equal(latest.project.id, crashProjectId)
-        assert.equal(latest.project.revision, 2)
-        assert.equal(latest.project.intervention.paused, true)
-        assert.deepEqual(latest.work.map(work => work.id).sort(), [...crashWorkIds].sort())
-        assert.deepEqual(latest.work.map(work => work.status), ['cancelled', 'cancelled'])
-        assert.ok(latest.work.every(work => work.cancelReason === 'Project paused: Revise after both reports.'))
-        emit(call('bizagent_work_read', { work_id: crashWorkIds[0] }, 'crash-work-first'))
-        emit({}, 'tool_calls')
-      } else if (stage === 2) {
-        assert.equal(latest.work.id, crashWorkIds[0])
-        assert.equal(latest.cancelDelivery.status, 'delivered')
-        emit(call('bizagent_work_read', { work_id: crashWorkIds[1] }, 'crash-work-second'))
+        emit(call('bizagent_project_read', { project_id: projectId }, 'submit-restart-read'))
         emit({}, 'tool_calls')
       } else {
-        assert.equal(latest.work.id, crashWorkIds[1])
-        assert.equal(latest.cancelDelivery.status, 'delivered')
-        emit({ role: 'assistant', content: 'Paused Project crash recovery verified.' })
+        assert.equal(latest.project.id, projectId)
+        assert.equal(latest.project.status, 'awaiting_acceptance')
+        assert.equal(latest.project.claims.length, 1)
+        assert.equal(latest.project.currentClaimId, latest.project.claims[0].id)
+        assert.deepEqual(latest.project.claims[0].work,
+          [{ id: projectWorkId, status: 'completed', resultMessageId: latest.work[0].resultMessageId }])
+        assert.equal(latest.work[0].id, projectWorkId)
+        assert.equal(latest.work[0].status, 'completed')
+        emit({ role: 'assistant', content: 'Project submission restart verified.' })
         emit({}, 'stop')
       }
-    } else if (isCrash) {
-      const stage = crashStage++
+    } else if (isWorkWorker) {
+      const stage = workStage++
       if (stage === 0) {
-        emit(call('bizagent_project_create', {
-          title: 'Crash pause smoke', goal: 'Review two reports.',
-          done_when: 'Both reports are reviewed.', idempotency_key: 'smoke-crash-pause',
-        }, 'crash-create'))
-        emit({}, 'tool_calls')
-      } else if (stage === 1 || stage === 2) {
-        if (stage === 1) assert.equal(latest.project.id, crashProjectId)
-        else assert.equal(latest.work.id, crashWorkIds[0])
-        const key = stage === 1 ? 'first' : 'second'
-        emit(call('bizagent_work_dispatch', {
-          to_address: 'role:analyst', goal: `Prepare ${key} report`,
-          acceptance_criteria: 'Return a report.', idempotency_key: `smoke-crash-${key}`,
-          project_id: crashProjectId,
-        }, `crash-dispatch-${key}`))
-        emit({}, 'tool_calls')
-      } else {
-        assert.equal(latest.work.id, crashWorkIds[1])
-        emit(call('bizagent_project_pause', {
-          project_id: crashProjectId, expected_project_revision: 1,
-          reason: 'Revise after both reports.',
-        }, 'crash-pause'))
-        emit({}, 'tool_calls')
-      }
-    } else if (isPlanRestore) {
-      const stage = planRestoreStage++
-      if (stage === 0) {
-        emit(call('bizagent_project_read', { project_id: workflowProjectId }, 'plan-restart-read'))
-        emit({}, 'tool_calls')
-      } else {
-        assert.equal(latest.project.workflow.revision, 3)
-        assert.deepEqual(latest.project.workflow.steps.map(step => step.id), ['collect'])
-        assert.equal(latest.project.workflowAmendments[0].reason, 'Add an evidence audit.')
-        assert.equal(latest.project.workflowAmendments[1].mode, 'rebuild')
-        assert.deepEqual(latest.project.workflowAmendments[1].retained, [])
-        assert.deepEqual(latest.project.intervention.history.map(item => item.action), ['pause', 'resume'])
-        emit({ role: 'assistant', content: 'Workflow amendment restart verified.' })
-        emit({}, 'stop')
-      }
-    } else if (isPlan) {
-      const stage = planStage++
-      if (stage === 0) {
-        emit(call('bizagent_project_create', {
-          title: 'Workflow plan smoke', goal: 'Review source evidence.',
-          done_when: 'An audit is recorded.', idempotency_key: 'smoke-workflow-plan',
-          workflow: { summary: 'Collect evidence.', steps: [collectStep] },
-        }, 'plan-create'))
+        assert.ok(JSON.stringify(messages).includes(`Work ID: ${projectWorkId}`))
+        emit(call('bizagent_work_accept', { work_id: projectWorkId }, 'work-accept'))
         emit({}, 'tool_calls')
       } else if (stage === 1) {
-        assert.equal(latest.project.id, workflowProjectId)
-        assert.equal(latest.project.workflow.revision, 1)
-        emit(call('bizagent_project_turn_join', { project_id: workflowProjectId }, 'plan-turn-join'))
+        assert.equal(latest.work.id, projectWorkId)
+        assert.equal(latest.work.status, 'accepted')
+        assert.equal(latest.work.projectId, projectId)
+        emit(call('bizagent_work_complete', { work_id: projectWorkId,
+          subject: 'Source evidence checked', body: 'Every cited source matches its record.' },
+        'work-complete'))
         emit({}, 'tool_calls')
       } else if (stage === 2) {
-        assert.equal(latest.participation.projectId, workflowProjectId)
+        assert.equal(latest.work.id, projectWorkId)
+        assert.equal(latest.work.status, 'completed')
+        assert.ok(latest.notification.deliveries.some(delivery =>
+          delivery.recipient === 'personal:default' && delivery.status === 'delivered'))
+        workCompleted = true
+        emit({ role: 'assistant', content: 'Project Work result delivered.' })
+        emit({}, 'stop')
+      } else {
+        emit({ role: 'assistant', content: 'Project Work already delivered.' })
+        emit({}, 'stop')
+      }
+    } else if (isSubmit) {
+      const stage = submitStage++
+      if (stage === 0) {
+        emit(call('bizagent_project_turn_join', { project_id: projectId }, 'submit-turn-join'))
+        emit({}, 'tool_calls')
+      } else if (stage === 1) {
+        assert.equal(latest.participation.projectId, projectId)
         assert.ok(latest.participation.sessionId)
-        emit(call('bizagent_project_plan_amend', {
-          project_id: workflowProjectId, expected_project_revision: 1,
-          expected_workflow_revision: 1, reason: 'Add an evidence audit.',
-          idempotency_key: 'smoke-plan-amend',
-          workflow: { summary: 'Collect and audit evidence.', steps: [collectStep, auditStep] },
-        }, 'plan-amend'))
+        emit(call('bizagent_work_dispatch', {
+          to_address: 'role:analyst', goal: 'Check the cited source records',
+          acceptance_criteria: 'Return one result that names any mismatched source.',
+          idempotency_key: 'smoke-project-work', project_id: projectId,
+        }, 'submit-dispatch'))
+        emit({}, 'tool_calls')
+      } else if (stage === 2) {
+        assert.equal(latest.work.id, projectWorkId)
+        assert.equal(latest.work.projectId, projectId)
+        assert.equal(latest.workerLaunch?.workerSessionId, stableId('work-session', projectWorkId))
+        await waitFor(() => workCompleted, 'Project Work completion')
+        emit(call('bizagent_work_read', { work_id: projectWorkId }, 'submit-work-read'))
         emit({}, 'tool_calls')
       } else if (stage === 3) {
-        assert.equal(latest.project.id, workflowProjectId)
-        assert.equal(latest.project.workflow.revision, 2)
-        assert.equal(latest.project.workflowAmendments.length, 1)
-        emit(call('bizagent_project_pause', {
-          project_id: workflowProjectId, expected_project_revision: 2,
-          reason: 'Check the execution state.',
-        }, 'plan-pause'))
+        assert.equal(latest.work.status, 'completed')
+        assert.equal(latest.resultDelivery.status, 'delivered')
+        emit(call('bizagent_project_submit', {
+          project_id: projectId, summary: 'Source conclusion ready',
+          body: 'The Analyst Work result confirms every cited source.',
+          done_when_assessment: 'The source conclusion is recorded in the delivered Work result.',
+        }, 'submit-project'))
         emit({}, 'tool_calls')
       } else if (stage === 4) {
-        assert.equal(latest.project.intervention.paused, true)
-        assert.deepEqual(latest.cancelledWorkIds, [])
-        emit(call('bizagent_project_plan_rebuild', {
-          project_id: workflowProjectId, expected_project_revision: 3,
-          expected_workflow_revision: 2, reason: 'Remove the unnecessary audit.',
-          idempotency_key: 'smoke-plan-rebuild',
-          workflow: { summary: 'Collect evidence only.', steps: [collectStep] },
-        }, 'plan-rebuild'))
-        emit({}, 'tool_calls')
-      } else if (stage === 5) {
-        assert.equal(latest.project.workflow.revision, 3)
-        assert.deepEqual(latest.project.workflow.steps.map(step => step.id), ['collect'])
-        emit(call('bizagent_project_resume', {
-          project_id: workflowProjectId, expected_project_revision: 4,
-        }, 'plan-resume'))
-        emit({}, 'tool_calls')
+        assert.equal(latest.project.status, 'awaiting_acceptance')
+        assert.equal(latest.claim.work[0].id, projectWorkId)
+        assert.equal(latest.claim.work[0].status, 'completed')
+        projectSubmitted = true
+        emit({ role: 'assistant', content: 'Project submission verified.' })
+        emit({}, 'stop')
       } else {
-        assert.equal(latest.project.intervention.paused, false)
-        assert.equal(latest.project.intervention.epoch, 1)
-        emit({ role: 'assistant', content: 'Workflow amendment verified.' })
+        emit({ role: 'assistant', content: 'Project submission already verified.' })
         emit({}, 'stop')
       }
     } else if (isWorker) {
@@ -364,13 +319,12 @@ async function stop(child) {
   if (!await waitForExit(child, 5000)) throw new Error('isolated headless DSH child did not exit')
 }
 
-async function headless(patch, task, options = {}) {
+async function headless(patch, task) {
   const child = spawn('dsh', ['--profile', 'headless', '--patch', patch,
     task], {
     cwd: packageRoot,
     env: { ...process.env, DSH_HOME: root, DSH_TELEMETRY_DISABLED: '1',
-      BIZAGENT_SMOKE_KEY: 'local-only', DSH_TOOLS_MODE: 'native',
-      ...(options.nodeOptions !== undefined ? { NODE_OPTIONS: options.nodeOptions } : {}) },
+      BIZAGENT_SMOKE_KEY: 'local-only', DSH_TOOLS_MODE: 'native' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
@@ -390,13 +344,6 @@ async function headless(patch, task, options = {}) {
     await stop(child)
     throw error
   } finally { clearTimeout(timer) }
-  if (options.expectedSignal !== undefined) {
-    if (result.signal !== options.expectedSignal) {
-      throw new Error(`headless DSH did not exit by ${options.expectedSignal} (${result.code ?? result.signal}): ${output}; `
-        + `server errors: ${JSON.stringify(serverErrors)}; requests: ${requests.length}`)
-    }
-    return output
-  }
   if (result.code !== 0) throw new Error(`headless DSH failed (${result.code ?? result.signal}): ${output}; `
     + `server errors: ${JSON.stringify(serverErrors)}; requests: ${requests.length}`)
   return output
@@ -459,39 +406,23 @@ try {
   assert.match(output, /Project Seat communication verified\./)
   const restored = await headless(patch, 'Read the persisted Project after restart and the Analyst reply.')
   assert.match(restored, /Project Seat restart verified\./)
-  const planned = await headless(patch, 'Create and amend an audited Workflow plan.')
-  assert.match(planned, /Workflow amendment verified\./)
-  const planRestored = await headless(patch, 'Read the amended Workflow after restart.')
-  assert.match(planRestored, /Workflow amendment restart verified\./)
-  const faultPreload = join(root, 'project-pause-fault.mjs')
-  await writeFile(faultPreload, `import { WorkLedger } from ${JSON.stringify(pathToFileURL(join(packageRoot, 'lib', 'work-ledger.js')).href)}
-const originalPut = WorkLedger.prototype.put
-let cancelled = 0
-WorkLedger.prototype.put = async function (work) {
-  if (work.status === 'cancelled' && ++cancelled === 2) process.kill(process.pid, 'SIGKILL')
-  return originalPut.call(this, work)
-}
-`)
-  const nodeOptions = [process.env.NODE_OPTIONS, `--import=${pathToFileURL(faultPreload).href}`]
-    .filter(Boolean).join(' ')
-  await headless(patch, 'Create a Project and crash during its pause.',
-    { nodeOptions, expectedSignal: 'SIGKILL' })
-  assert.equal(crashStage, 4)
-  const crashRestored = await headless(patch, 'Read the paused Project after a crash.')
-  assert.match(crashRestored, /Paused Project crash recovery verified\./)
+  const submitted = await headless(patch, 'Dispatch formal Project Work and submit the result.')
+  assert.match(submitted, /Project submission verified\./)
+  assert.ok(workCompleted && projectSubmitted)
+  const submitRestored = await headless(patch, 'Read the submitted Project after restart.')
+  assert.match(submitRestored, /Project submission restart verified\./)
   assert.ok(requests.some(request => request.tools?.some(tool =>
     tool.function?.name === 'bizagent_project_invite')))
   assert.ok(requests.some(request => request.tools?.some(tool =>
     tool.function?.name === 'bizagent_inbox_read')))
   assert.ok(requests.some(request => request.tools?.some(tool =>
-    tool.function?.name === 'bizagent_project_plan_amend')))
-  assert.ok(requests.some(request => request.tools?.some(tool =>
-    tool.function?.name === 'bizagent_project_plan_rebuild')))
-  assert.ok(requests.some(request => request.tools?.some(tool =>
     tool.function?.name === 'bizagent_project_turn_join')))
   assert.ok(requests.some(request => request.tools?.some(tool =>
-    tool.function?.name === 'bizagent_project_pause')))
-  process.stdout.write('BizAgent real DSH Project Seat smoke passed: invite, Seat wake context, Project read, reply, Home-bound execution, turn join, Workflow amendment, paused rebuild, resume, restart recovery, and crash-safe pause repair.\n')
+    tool.function?.name === 'bizagent_project_submit')))
+  assert.ok(requests.every(request => !request.tools?.some(tool =>
+    /^bizagent_project_(pause|resume|plan_|node_|delegate|request_human|asset_|delivery_feedback|role_suggest|execution_)/
+      .test(tool.function?.name ?? ''))))
+  process.stdout.write('BizAgent real DSH Project smoke passed: create, invite, Seat wake context, Project read, reply, Home-bound execution, restart recovery, turn join, formal Work dispatch and completion, result submission, and post-restart readback.\n')
 } finally {
   await close()
   await rm(root, { recursive: true, force: true })

@@ -2,10 +2,7 @@ import assert from 'node:assert/strict'
 import { rm } from 'node:fs/promises'
 import { test } from 'node:test'
 import { apply, inject } from '../lib/index.js'
-import { HomeStore } from '../lib/home-store.js'
 import { LearningLedger } from '../lib/ledger.js'
-import { WorkLedger } from '../lib/work-ledger.js'
-import { ProjectLedger } from '../lib/project-ledger.js'
 import { makeTempDir } from './temp-dir.mjs'
 
 class Table {
@@ -104,7 +101,7 @@ test('DSH plugin entry registers durable context and the complete v0.1 tool surf
     indexMaxBytes: 4096,
   })
 
-  assert.equal(tools.length, 79)
+  assert.equal(tools.length, 59)
   assert.deepEqual(tools.map(tool => tool.name).sort(), [
     'bizagent_agent_search',
     'bizagent_episode_read',
@@ -143,30 +140,10 @@ test('DSH plugin entry registers durable context and the complete v0.1 tool surf
     'bizagent_memory_update',
     'bizagent_memory_use_outcomes',
     'bizagent_project_artifact_read',
-    'bizagent_project_asset_publish',
-    'bizagent_project_asset_read',
     'bizagent_project_create',
-    'bizagent_project_delegate',
-    'bizagent_project_delivery_feedback',
-    'bizagent_project_delivery_feedback_read',
-    'bizagent_project_delivery_feedback_resolve',
-    'bizagent_project_execution_inspect',
-    'bizagent_project_execution_supplement',
     'bizagent_project_invite',
-    'bizagent_project_node_dispatch',
-    'bizagent_project_node_read',
-    'bizagent_project_node_reopen',
-    'bizagent_project_node_review',
-    'bizagent_project_pause',
-    'bizagent_project_plan_amend',
-    'bizagent_project_plan_propose',
-    'bizagent_project_plan_rebuild',
     'bizagent_project_read',
-    'bizagent_project_request_human',
-    'bizagent_project_resume',
-    'bizagent_project_resume_autonomy',
     'bizagent_project_review',
-    'bizagent_project_role_suggest',
     'bizagent_project_seat_release',
     'bizagent_project_submit',
     'bizagent_project_turn_join',
@@ -371,68 +348,4 @@ test('DSH plugin entry registers durable context and the complete v0.1 tool surf
   assert.equal(published.asset.revision, 2)
 
   for (const dispose of disposers.reverse()) await dispose()
-})
-
-test('plugin startup repairs a Project paused before its linked Work was cancelled', async t => {
-  const root = await makeTempDir('bizagent-plugin-paused-recovery-')
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const previousDshHome = process.env.DSH_HOME
-  process.env.DSH_HOME = `${root}/dsh-profile`
-  t.after(() => {
-    if (previousDshHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = previousDshHome
-  })
-  const store = new HomeStore(root)
-  await store.initialize()
-  await store.createHome({ address: 'personal:alice' })
-  await store.createHome({ address: 'role:analyst' })
-  const domains = new Map()
-  const facility = { async open(definition) {
-    if (!domains.has(definition.name)) domains.set(definition.name, new Domain())
-    return domains.get(definition.name)
-  } }
-  const learning = await LearningLedger.open(facility)
-  const work = await WorkLedger.open(facility)
-  const projects = await ProjectLedger.open(facility)
-  const now = '2026-09-26T00:00:00.000Z'
-  await learning.putBinding({ sessionId: 'lead-session', homeAddress: 'personal:alice', boundAt: now })
-  await projects.put({ schemaVersion: 1, id: 'paused-project', idempotencyKey: 'paused-project',
-    lead: 'personal:alice', createdBySessionId: 'lead-session', title: 'Interrupted pause',
-    goal: 'Review the report.', doneWhen: 'The report is reviewed.',
-    status: 'open', revision: 2, claims: [], reviews: [],
-    intervention: { epoch: 0, paused: true, history: [{ action: 'pause',
-      reason: 'Change the plan.', bySessionId: 'lead-session', at: now, epoch: 0 }] },
-    createdAt: now, updatedAt: now })
-  await work.put({ schemaVersion: 1, id: 'pending-work', idempotencyKey: 'pending-work',
-    requester: 'personal:alice', assignee: 'role:analyst', returnToSessionId: 'lead-session',
-    goal: 'Prepare a report', acceptanceCriteria: 'Return a report.', projectId: 'paused-project',
-    status: 'open', requestMessageId: 'request-pending-work', createdAt: now, updatedAt: now })
-  const disposers = []
-  const provided = new Map()
-  const ctx = {
-    storageDomain: facility,
-    sessionQuery: {
-      async listSessions() { return [] },
-      async readSession(id) { return { session: { id: String(id) }, events: [] } },
-    },
-    agents: { get() { return undefined }, async create() { throw new Error('unexpected create') },
-      async resume() { throw new Error('unexpected resume') } },
-    tools: { register() { return () => {} }, guard() { return () => {} } },
-    systemPrompt: { section() {}, context() {} },
-    effect(effect) { const dispose = effect(); disposers.push(dispose); return dispose },
-    provide(name, value) { provided.set(name, value); return () => provided.delete(name) },
-    on() { return () => {} },
-  }
-  try {
-    await apply(ctx, { homeRoot: root, defaultHome: 'personal:alice',
-      autoCreateDefaultHome: false, identityMaxBytes: 2048, indexMaxBytes: 4096 })
-    assert.equal(work.get('pending-work').status, 'cancelled')
-    assert.equal(work.get('pending-work').cancelledByProjectSessionId, 'lead-session')
-    assert.equal(work.get('pending-work').cancelReason, 'Project paused: Change the plan.')
-    assert.equal(learning.getInboxDelivery(work.get('pending-work').cancelMessageId,
-      'role:analyst').status, 'delivered')
-    assert.equal(provided.get('bizagent').projectExecutionPaused('paused-project'), true)
-  } finally {
-    for (const dispose of disposers.reverse()) await dispose()
-  }
 })

@@ -40,7 +40,7 @@ Home 持久化、重启与异常退出恢复；本机用 DSH `0.1.1-rc.2` 验证
 OpenAI 兼容模型，让 DSH 原生工具依次调用 `bizagent_home_status`、`bizagent_agent_search` 和
 `bizagent_frame_open`，核对首次打开、未变化重开及显式刷新的模型可见结果。不使用外部模型或现有 DSH profile；
 它尚不覆盖正式 Work 的执行路径。
-运行 `npm run smoke:project` 可验证 Project Seat 邀请、独立 Inbox Session 的上下文、项目读取、回复，以及普通 Home turn 加入 Project、Workflow 计划修订、暂停重建、恢复工具和重启后的账本回读。脚本还会在隔离 profile 中只终止自己启动的 DSH 子进程，验证暂停清理中途异常退出后的第二进程恢复。
+运行 `npm run smoke:project` 可验证 Project 创建、Seat 邀请、独立 Inbox Session 的上下文、项目读取、回复和重启后的账本回读，再由普通 Home turn 加入 Project、派发正式 Work、等独立 worker 完成后提交结果声明，并在重启后回读。
 运行 `npm run smoke:work` 可验证正式 Work：在隔离 Headless profile 中预置请求方与执行 Home，
 由本地模拟模型驱动真实 DSH Agent 派工、启动独立 worker Session、完成结果、投递回请求方，
 再启动第二个 DSH 进程读取持久的 `completed` Work 和 `delivered` 结果回执。
@@ -236,11 +236,10 @@ DSH 成功压缩 Session 后，再次打开已有 Frame 会自动重发其上下
 `lead` 让共享 Home 引导当前请求的领域分析，`contribute` 提供专业视角，`reference` 只作具名资料引用。
 切换 mode 会把新的参与指令交给模型，但不会切换 Session 身份、工具权限或学习写入者。
 
-`bizagent_project_create` 固定目标与完成标准，可同时冻结 Workflow 节点及依赖；动态 Project 使用
-`bizagent_work_dispatch` 关联正式责任，Workflow Project 使用 `bizagent_project_node_dispatch` 派就绪节点。
-配置了目标工作区时会尝试启动独立 worker。指定 reviewer Home 的节点可用 `bizagent_project_node_read` 和
-`bizagent_project_node_review` 核对结果；批准后的文件若改变，lead 用 `bizagent_project_node_reopen`
-留痕回退节点及已完成下游，再派新的 Work。Project 提交与审阅会保存每版声明和决策。
+`bizagent_project_create` 固定目标与完成标准；lead 用 `bizagent_project_invite` 邀请 Seat，用
+`bizagent_work_dispatch` 的 `project_id` 关联正式责任。配置了目标工作区时会尝试启动独立 worker。
+Work 都结束后，lead 用 `bizagent_project_submit` 提交结果声明；接受只能由真人经认证路由完成，
+lead 只能用 `bizagent_project_review` 退回返工。Project 提交与审阅会保存每版声明和决策。
 完整工具的参数与结果见[工具参考](tools.md)。
 
 Home 文件的版本化归档、完整性校验和空目录恢复见[Home 文件归档](home-archive.md)。该归档不包含 DSH

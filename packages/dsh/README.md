@@ -72,14 +72,14 @@ Home 可由 urgent 信立即、normal 信按本 Home `inbox.json` 作息启动�
 需要明确交付责任时，可创建独立 Work：请求方给出目标、完成标准和幂等键；执行方先用自己的 Session
 独占认领，再以正式完成工具交回
 唯一结果，请求方可在结果预留前取消。请求与结果通知仍由 Inbox 传递，Work 状态由独立账本保存。
-执行方也可随唯一结果冻结 `artifacts/` 文件版本；请求方与指定 Workflow reviewer 可按范围回读，
-节点批准前会检查工作稿在提交后是否改变。
+执行方也可随唯一结果冻结 `artifacts/` 文件版本；请求方可按范围回读。
 配置了执行方 Workspace 映射时，派发会尝试启动独立 DSH worker Session；启动失败保留责任，可重试。
 Project 现在单独保存目标、完成标准、关联 Work、版本化结果声明、Agent 返工与真人接受记录；
-提交时可冻结 `artifacts/` 下的文件版本，之后按范围回读，验收与恢复包会核验快照；
-可在创建时冻结 Workflow 依赖图，按 ready 节点派正式 Work；指定 reviewer Home 的节点等精确结果获 approve
-后才释放下游，rework 会开启下一次尝试。已批准产物改变会阻止下游派发和 Project 结算；lead 可记录原因、
-回退节点及已完成下游，再派新一轮 Work。Project Seat 已支持邀请、职责、地址路由和唤醒时的项目上下文；可审计的 Workflow 修订允许调整未派发节点和添加节点；持久暂停会取消未结 Work 并挡住新执行，暂停且静止时还可删节点、显式返工并继承有效结果；启动恢复会补齐暂停闸门之后未完成的 Work 取消和通知。普通 Home Session 可按 Project turn 显式加入，暂停和恢复据此检查当前轮次，项目普通信发给 lead Home 也不会在暂停时自动唤醒。真人节点复核、待复核 Work 的指定人改派、结项验收、执行干预与计划调整需要宿主接入身份、grant、请求保护和运行时回调；未加入 Home 轮次的自动归属和跨进程单飞仍缺。见[Project 工具](docs/tools.md#正式-project)与
+提交时可冻结 `artifacts/` 下的文件版本，之后按范围回读，验收与恢复包会核验快照。
+基本流程是：创建 Project → 邀请 Seat → 派正式 Work → 执行方完成 Work → lead 提交结果声明 →
+真人经认证路由接受，或由 lead / 真人退回返工。Project Seat 支持邀请、职责、地址路由和唤醒时的项目上下文；
+普通 Home Session 可按 Project turn 显式加入。Agent 只能退回返工，结项验收需要宿主接入身份、grant 和请求保护；
+未加入 Home 轮次的自动归属和跨进程单飞仍缺。见[Project 工具](docs/tools.md#正式-project)与
 [正式 Work 工具](docs/tools.md#正式-work)。
 
 上述候选与发布能力属于当前 checkout 的 [Unreleased 改动](CHANGELOG.md)，不意味着此前构建的 alpha.2
@@ -104,7 +104,7 @@ npm run examples
 `npm run smoke:plugin-add` 使用真实 DSH CLI 在临时 profile 中安装 tarball 并验证 Bundle 自动加入和重启恢复；
 `npm run smoke:agent` 用本地模拟模型验证真实 Headless
 Agent Loop 的 Home 工具调用；`npm run smoke:work` 再验证独立 worker 的正式 Work 交付与跨重启读取。
-`npm run smoke:project` 验证 Project Seat 邀请、定向信件、独立 Session 唤醒、回复，以及 Workflow 修订、暂停重建、恢复和重启后回读；还会在隔离 profile 中于暂停清理中途终止一个 DSH 子进程，再由第二进程核验取消与通知恢复。
+`npm run smoke:project` 验证 Project 创建、Seat 邀请、定向信件、独立 Session 唤醒、回复和重启后回读，再验证 turn 加入、正式 Work 派发与完成、结果声明提交和重启后的回读。
 `npm run smoke:learning` 使用真实 DSH Session 验证专用 worker 启动、批次扫描、原事件证据候选与完成回执。
 详见[快速上手](docs/quickstart.md)。
 
@@ -130,8 +130,8 @@ Agent Loop 的 Home 工具调用；`npm run smoke:work` 再验证独立 worker �
 - 左侧浏览 Personal、Business、Role、Capability Home；
 - 中间用 Memory strata 展示 Episode → Memory → Insight → Knowledge → Method 的沉淀结构；
 - 学习台展示当前 Home 最近 20 条 Worklog，可展开正文与 Work、Project、文件引用；
-- 项目视图按当前 Session 的 Home 显示可见 Project、待处理状态、Workflow 节点、关联 Work 和当前交付；
-  宿主挂载已认证需求源路由后，可浏览已授权来源、纳入 intake Project 并确认目标。宿主还可挂载真人节点复核、待复核人改派、最终验收、暂停/恢复及计划调整路由；「我的审核待办」按当前真人账号展示节点 Work 与结项交付，不要求当前 Session Home 参与项目；
+- 项目视图按当前 Session 的 Home 显示可见 Project、待处理状态、关联 Work、Seat 和当前交付；
+  宿主挂载已认证需求源路由后，可浏览已授权来源、纳入 intake Project 并确认目标。宿主还可挂载真人验收路由；「我的审核待办」按当前真人账号展示待验收的结项交付，不要求当前 Session Home 参与项目；
 - 展开资产可检查正文、revision、fitness、使用回执和证据链；
 - 右侧 proposal inbox 展示跨 Agent 经验和目标资产；宿主挂载认证真人裁决路由后可接受或拒绝；
 - 可创建组织图之外的新 Agent Home，但不能绕开 evidence 规则直接手工创建 Memory。
@@ -143,7 +143,7 @@ UI 的 Host API、Client slot 与安全边界见[插件化 UI 设计](docs/ui.md
 - [本地快速上手](docs/quickstart.md)
 - [架构与责任边界](docs/architecture.md)
 - [Home 文件归档与恢复](docs/home-archive.md)
-- [真人 Project 干预、计划调整与验收](docs/project-review.md)
+- [真人 Project 验收](docs/project-review.md)
 - [学习生命周期](docs/learning-lifecycle.md)
 - [Agent 工具参考](docs/tools.md)
 - [增长、研发、客服案例指南](docs/casebook.md)

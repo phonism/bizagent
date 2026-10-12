@@ -43,11 +43,10 @@ UI 的职责是让用户先创建可工作的 Agent 组织，再让组织学习�
 - **Memory strata**：Episode → Memory → Insight → Knowledge → Method；
 - **Worklog**：当前 Home 最近 20 个 Session 的摘要、正文和来源引用；正式 Work 结果及普通 Session 工具活动自动补写的记录有来源标签，
   来源及文件的当前状态需用 Agent 工具核验；
-- **Projects**：按当前 Session 的 Home 列出 lead 或活跃 Seat 可见的项目；分页查看目标、完成标准、暂停原因、
-  Workflow 节点推导状态、关联 Work、Seat 与当前交付。待处理筛选包含 intake、暂停和待验收；刷新读取账本最新状态。
-  宿主挂载真人审核路由后，「我的审核待办」按当前账号列出可裁决的节点 Work 与待验收项目交付，
-  包括交付引用的正式 Work 成果文字和固定文件版本，不依赖当前 Session Home；
-  宿主挂载计划路由后，负责人可修订计划、重做节点或改派待复核人。
+- **Projects**：按当前 Session 的 Home 列出 lead 或活跃 Seat 可见的项目；分页查看目标、完成标准、
+  关联 Work、Seat 与当前交付。待处理筛选包含待验收；刷新读取账本最新状态。
+  宿主挂载真人审核路由后，「我的审核待办」按当前账号列出待验收项目交付，
+  包括交付引用的正式 Work 成果文字和固定文件版本，不依赖当前 Session Home。
 - **Requirement Sources**：宿主挂载已认证路由后，在项目视图按 Home 浏览已安装 App 的无 effect query，
   按时期与文本筛选条目；人点击纳入时重新读取来源，再在 intake Project 中确认内部目标和完成标准。
 - **Apps**：按 Home 查看 App 制作、发布与安装证据。宿主挂载真人认证的审批路由后，可信工作台还可列出
@@ -127,9 +126,9 @@ POST /api/bizagent/v1/proposals/decision
   提供审核人或授权引用；读取动作能力和提交裁决都会调用逐提案权限回调，提交时重新复核；Service 再次验证
   owner Home 与 proposal target 一致；无授权时页面仅展示提案；
 - Project 读取先核验宿主 Session，再由 Service 的 lead/活跃 Seat Home 可见性规则筛选；列表每页最多 50 条，
-  节点状态从持久 Work 记录推导，不代表实时进程状态。切换 Session 会重置页面数据；
-- Project 的暂停、恢复、节点复核、最终验收和计划调整经可选宿主真人认证路由执行；宿主必须提供当前身份、
-  逐 Project/Home 授权、写入请求校验及所需运行时回调。未挂载相应路由时，面板只展示可读状态；
+  Work 状态来自持久记录，不代表实时进程状态。切换 Session 会重置页面数据；
+- Project 的最终验收经可选宿主真人认证路由执行；宿主必须提供当前身份、
+  逐 Project/Home 授权和写入请求校验。未挂载该路由时，面板只展示可读状态；
 - 需求源的纳入与 intake 确认使用独立的可选宿主认证路由；认证用户来自宿主，Service 再检查 Home 与 App grant。
   该入口不授予其他 Project 干预权；
 - App Action 审批使用独立的可选宿主认证路由，读取时逐票核验审核权限，POST 还需宿主防跨站校验与服务层

@@ -1,6 +1,6 @@
 import { defineDomain, domainTable, type Domain, type DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
-import { HomeAddressSchema, stableId, type HomeAddress } from './domain.js'
+import { HomeAddressSchema, type HomeAddress } from './domain.js'
 
 export const FormalWorkSchema = z.object({
   schemaVersion: z.literal(1),
@@ -12,31 +12,12 @@ export const FormalWorkSchema = z.object({
   goal: z.string().min(1).max(200),
   acceptanceCriteria: z.string().min(1).max(4000),
   projectId: z.string().min(1).max(128).optional(),
-  requesterSeatAddress: z.string().min(1).max(200).optional(),
-  assigneeSeatAddress: z.string().min(1).max(200).optional(),
-  workflowNodeId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/).optional(),
-  workflowAttempt: z.number().int().positive().optional(),
-  workflowExecutionEpoch: z.number().int().nonnegative().optional(),
-  /** Frozen when a Workflow result is reserved; later progression changes cannot bypass this review. */
-  workflowReview: z.discriminatedUnion('mode', [
-    z.object({ mode: z.literal('automatic'), progressionRevision: z.number().int().nonnegative() }),
-    z.object({ mode: z.literal('reviewed'), progressionRevision: z.number().int().nonnegative(),
-      reviewerHome: HomeAddressSchema, criteria: z.string().min(1).max(4000) }),
-  ]).optional(),
   status: z.enum(['open', 'accepted', 'completing', 'completed', 'cancelled']),
   requestMessageId: z.string().min(1),
   /** Frozen at dispatch. Old records have no automatic startup intent. */
   autoStart: z.boolean().optional(),
   workerSessionId: z.string().min(1).optional(),
   workerCwd: z.string().min(1).optional(),
-  supplements: z.array(z.object({
-    id: z.string().min(1),
-    requestId: z.string().min(1).max(128),
-    epoch: z.number().int().nonnegative(),
-    message: z.string().min(1).max(4000),
-    bySessionId: z.string().min(1),
-    createdAt: z.string().min(1),
-  })).max(100).optional(),
   workerOptions: z.object({
     provider: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
@@ -63,42 +44,9 @@ export const FormalWorkSchema = z.object({
   cancelMessageId: z.string().min(1).optional(),
   cancelReason: z.string().min(1).max(2000).optional(),
   cancelledBySessionId: z.string().min(1).optional(),
-  cancelledByProjectSessionId: z.string().min(1).optional(),
-  cancelledByProjectPrincipal: z.string().min(1).max(200).optional(),
 }).superRefine((work, context) => {
-  if (work.requester === work.assignee && work.workflowNodeId === undefined) {
-    context.addIssue({ code: 'custom', path: ['assignee'], message: 'same-Home Work requires a Project Workflow node' })
-  }
-  if (work.supplements !== undefined && (work.projectId === undefined
-    || new Set(work.supplements.map(item => item.requestId)).size !== work.supplements.length
-    || new Set(work.supplements.map(item => item.id)).size !== work.supplements.length)) {
-    context.addIssue({ code: 'custom', path: ['supplements'],
-      message: 'Project Work supplements require a Project and unique request IDs' })
-  }
-  if ((work.workflowNodeId === undefined) !== (work.workflowAttempt === undefined)
-    || (work.workflowNodeId !== undefined && work.projectId === undefined)) {
-    context.addIssue({ code: 'custom', path: ['workflowNodeId'], message: 'Workflow Work requires a Project, node, and attempt' })
-  }
-  if (work.workflowExecutionEpoch !== undefined && work.workflowNodeId === undefined) {
-    context.addIssue({ code: 'custom', path: ['workflowExecutionEpoch'],
-      message: 'Workflow execution epoch requires a Workflow Work node' })
-  }
-  if (work.workflowReview !== undefined && (work.workflowNodeId === undefined
-    || !['completing', 'completed'].includes(work.status))) {
-    context.addIssue({ code: 'custom', path: ['workflowReview'],
-      message: 'Workflow review gate requires a reserved Workflow result' })
-  }
-  if ((work.requesterSeatAddress !== undefined || work.assigneeSeatAddress !== undefined)
-    && work.projectId === undefined) {
-    context.addIssue({ code: 'custom', path: ['projectId'], message: 'Project Seat Work requires a Project' })
-  }
-  if (work.requesterSeatAddress !== undefined && work.requesterSeatAddress
-    !== `seat:${work.projectId}:${stableId('seat', work.requester)}`) {
-    context.addIssue({ code: 'custom', path: ['requesterSeatAddress'], message: 'Work requester Seat does not match its Home' })
-  }
-  if (work.assigneeSeatAddress !== undefined && work.assigneeSeatAddress
-    !== `seat:${work.projectId}:${stableId('seat', work.assignee)}`) {
-    context.addIssue({ code: 'custom', path: ['assigneeSeatAddress'], message: 'Work assignee Seat does not match its Home' })
+  if (work.requester === work.assignee) {
+    context.addIssue({ code: 'custom', path: ['assignee'], message: 'Work assignee must be another Agent Home' })
   }
   if (['accepted', 'completing', 'completed'].includes(work.status)
     && (!work.workerSessionId || !work.acceptedAt)) {
@@ -120,12 +68,6 @@ export const FormalWorkSchema = z.object({
   }
   if (work.status === 'cancelled' && (!work.cancelledAt || !work.cancelMessageId || !work.cancelReason || !work.cancelledBySessionId)) {
     context.addIssue({ code: 'custom', path: ['cancelledAt'], message: 'cancelled Work requires a reason and Session' })
-  }
-  if ((work.cancelledByProjectSessionId !== undefined || work.cancelledByProjectPrincipal !== undefined)
-    && (work.projectId === undefined || work.status !== 'cancelled'
-      || (work.cancelledByProjectSessionId !== undefined) === (work.cancelledByProjectPrincipal !== undefined))) {
-    context.addIssue({ code: 'custom', path: ['cancelledByProjectSessionId'],
-      message: 'Project pause cancellation requires a cancelled linked Work' })
   }
 })
 

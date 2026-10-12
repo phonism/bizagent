@@ -154,140 +154,51 @@ Memory、proposal 或正式 Work 的责任状态。
 
 | 工具 | 必填 | 可选与默认值 | 返回重点 |
 | --- | --- | --- | --- |
-| `bizagent_project_create` | `title`、`goal`、`done_when`、`idempotency_key` | `workflow`：summary 与 1–12 个节点；节点可含 `output_contract` | 当前 Home 作为 lead 的 durable Project；可冻结依赖图和节点产物规则 |
+| `bizagent_project_create` | `title`、`goal`、`done_when`、`idempotency_key` | 无 | 当前 Home 作为 lead 的 durable Project；Host 可用时同时准备 Project 主对话 |
 | `bizagent_projects` | 无 | `status`；`before_project_id`；`limit` 默认 20、最大 100 | 当前 lead 或活跃 Seat Home 可见的 Project 列表和下一页游标 |
-| `bizagent_project_read` | `project_id` | 无 | Project、Seat 和计划修订历史、历次结果声明与审阅、关联 Work；Workflow 节点推导状态 |
-| `bizagent_project_execution_inspect` | `project_id` | 无 | 当前执行 epoch、暂停状态、Workflow 与关联 Work，加上宿主可检查的忙碌或不确定 Session；排除调用者本轮 Session |
-| `bizagent_project_execution_supplement` | `project_id`、`work_id`、`expected_epoch`、`request_id`、`message` | 无 | lead 给未完成的关联 Work 留存补充并投递到原 worker Session；重复请求幂等，返回 queued、already-queued 或 pending |
-| `bizagent_project_request_human` | `project_id`、`expected_project_revision`、`request_id`、`question`、`reason` | `assignee`：真人地址或已绑定负责人的 Role Home；`options`：决策问题的 2–6 个答案；`context_refs` | 将 Project 转为等待真人答复，按稳定请求 ID 向本人 Inbox 投递明确问题；留存失败可恢复 |
-| `bizagent_project_resume_autonomy` | `project_id`、`handoff_id`、`reply_message_id`、`expected_project_revision` | 无 | 核验指定真人的确切已投递回信，记录回答与恢复 Agent 自主推进；执行暂停仍需单独恢复 |
+| `bizagent_project_read` | `project_id` | 无 | Project、Seat 与事件、历次结果声明与审阅、关联 Work |
 | `bizagent_project_turn_join` | `project_id` | 无 | 将当前普通 Home Session 的本轮执行记为项目参与；不扩大 Project 权限 |
-| `bizagent_project_plan_propose` | `project_id`、`expected_project_revision`、`expected_workflow_revision`、`reason`、`idempotency_key`、`workflow` | 无 | lead Home 留存待真人审阅的完整计划草案；不改变执行 Workflow |
-| `bizagent_project_plan_amend` | `project_id`、`expected_project_revision`、`expected_workflow_revision`、`reason`、`idempotency_key`、`workflow` | 无 | lead Home 追加审计计划修订；只能更改未派发节点或添加节点 |
-| `bizagent_project_pause` | `project_id`、`expected_project_revision`、`reason` | 无 | 持久关闭派工入口，取消未完成的关联 Work，并中断当前宿主已知的 Project Session |
-| `bizagent_project_plan_rebuild` | `project_id`、`expected_project_revision`、`expected_workflow_revision`、`reason`、`idempotency_key`、`workflow` | `restart_node_ids`：显式返工节点 | 在暂停且静止时重建 Workflow；可删节点，并审计继承的已完成 Work |
-| `bizagent_project_resume` | `project_id`、`expected_project_revision` | 无 | 未结 Work、取消通知和已知 Session 均核查通过后增加执行 epoch 并解除暂停 |
 | `bizagent_project_invite` | `project_id`、`home_address`、`responsibility` | 无 | lead 邀请活跃共享 Home，返回稳定 Seat 地址和 Project 修订；重复邀请幂等 |
-| `bizagent_project_role_suggest` | `project_id`、`role_home`、`proposed_principal`、`reason`、`expected_project_revision`、`idempotency_key` | 无 | lead 或活跃 Seat Agent 对已加入的 Role Seat 建议真实负责人，不改变权限；需真人经理确认 |
-| `bizagent_project_delegate` | `project_id`、`to_address`、`responsibility`、`goal`、`acceptance_criteria`、`idempotency_key` | `output_contract` | lead 或活跃 Seat Home 邀请目标共享 Home 并创建正式 Work；Work 冻结目标 Seat、请求方 Seat 和可选产物规则，按目标 Home 启动 worker |
 | `bizagent_project_seat_release` | `project_id`、`seat_address` | 无 | lead 释放没有未结关联 Work 的 Seat，撤销项目读取权限 |
-| `bizagent_project_node_dispatch` | `project_id`、`node_id` | 无 | 将已就绪节点派为正式 Work，并尝试启动映射的 DSH worker |
-| `bizagent_project_node_read` | `project_id`、`node_id` | 无 | lead、活跃 Seat 或指定 reviewer Home 读取节点、最新 Work 结果与审阅 |
-| `bizagent_project_node_review` | `project_id`、`node_id`、`work_id`、`decision`、`reason` | `decision` 为 approve 或 rework | 指定 reviewer Home 对精确 Work 结果的决策 |
-| `bizagent_project_node_reopen` | `project_id`、`node_id`、`reason` | 无 | lead Home 回退已完成节点；级联使已完成下游重新派工，保留旧结果与原因 |
-| `bizagent_project_submit` | `project_id`、`summary`、`body`、`done_when_assessment` | `artifact_refs`：最多 10 个 `artifacts/` 下文件；优先使用已发布的 Project 工作稿版本，其余从当前 Session Workspace 读取 | 一版不可变结果声明、文件快照与提交时的 Work 状态快照 |
+| `bizagent_project_submit` | `project_id`、`summary`、`body`、`done_when_assessment` | `artifact_refs`：最多 10 个当前 Session Workspace 中 `artifacts/` 下的文件 | 一版不可变结果声明、文件快照与提交时的 Work 状态快照 |
 | `bizagent_project_artifact_read` | `project_id`、`claim_id`、`path` | `offset` 默认 0；`limit` 默认 8192、最大 65536 字节 | 该结果声明保留的文件字节片段，Base64 编码及下一页偏移 |
-| `bizagent_project_asset_publish` | `project_id`、`path`、`expected_project_revision`、`idempotency_key` | `expected_previous_sha256`：替换同路径上一版本时必填 | lead 或活跃 Seat 发布当前 Workspace 的工作稿为不可变 Project 版本 |
-| `bizagent_project_asset_read` | `project_id`、`path` | `revision`：不填则读最新版本；`offset`、`limit`：分页读取原始字节 | lead 或活跃 Seat 读取已发布的工作稿快照 |
-| `bizagent_project_delivery_feedback` | `project_id`、`path`、`version`、`expected_sha256`、`expected_project_revision`、`idempotency_key`、`body` | `section`：最多 200 字；`version` 为 working 或 submitted | lead 或活跃 Seat 对确切工作稿/提交稿留意见，保存被审阅字节并通知 lead Home |
-| `bizagent_project_delivery_feedback_read` | `project_id`、`feedback_id` | `offset`、`limit`：分页读取原始字节 | 回读该意见审阅时的固定文件版本 |
-| `bizagent_project_delivery_feedback_resolve` | `project_id`、`feedback_id`、`expected_project_revision`、`reply`、`path`、`working_revision` | 无 | lead 说明处理或未采纳理由，并引用已发布的工作稿版本 |
 | `bizagent_project_review` | `project_id`、`claim_id`、`decision`、`reason` | Agent 只可选择 rework | 对精确声明的返工记录；最终接受走宿主认证的真人审核路由 |
+
+基本流程：lead 创建 Project → 邀请 Seat → 用 `work_dispatch` 的 `project_id` 派正式 Work → 执行方完成 Work →
+lead 提交结果声明 → 真人经认证路由接受，或由 lead / 真人退回返工。
 
 Project 保存在独立 `bizagent_project` domain。创建时固定 lead Home、目标与完成标准；相同幂等键和内容重试只会得到
 原 Project。lead 可为其他活跃共享 Home 邀请 Seat，记录责任和稳定的 `seat:<projectId>:<seatId>` 地址；
-活跃 Seat Home 可读取项目全文、关联 Work、节点和保留的项目产物，释放后立即失去这些读取权限。
+活跃 Seat Home 可读取项目全文、关联 Work 和保留的结果产物，释放后立即失去这些读取权限。
 责任变更、释放和重新加入都会增加 Project 修订并留下事件；同内容重复邀请、重复释放不会增加修订。
-邀请仅建立项目参与和读取权限，不代表接受正式 Work，也不启动 worker。未结关联 Work 存在时不能释放其执行 Home 的 Seat。
-Role Seat 的真实负责人是独立的项目责任记录，不修改 Home owner、Seat 成员、Work reviewer 或实际读取权限。
-Agent 建议仅接受 Home 目录中已登记的真人 principal；真人经理确认时，宿主须再次核验该人对目标 Role Home
-的当前授权。建议、直接绑定、清空和拒绝都进入 Project 修订历史；目标角色后来调整或 Seat 释放会使未处理
-建议失效。`/api/bizagent/project-role-assignments` 是可选宿主认证路由，Projects 面板在宿主授予读取权时显示
-绑定和建议，只有经理权限可取得候选人并修改。恢复包校验建议、决定与绑定修订链。
-动态项目可用 `project_delegate` 把邀请与正式 Work 合为一步；已加入的 Seat Home 也可继续委托其他共享 Home。
-Work 保存执行方 Seat 地址；请求方已入席时也保存其 Seat 地址，通知给执行 Home 时附上 Project ID 与 Seat 地址，执行仍在该 Home 的 Workspace。
-有未结正式 Work 的请求方 Seat 也不能释放。相同 Work 幂等键重试不会修改 Seat 职责；冲突请求在修改 Seat 前被拒绝。
-提交、最终审阅、Workflow 节点派工与直接关联动态 Work 的 `work_dispatch` 仍只对 lead Home 开放；
-未受邀请的指定节点 reviewer 仅可读取和审阅对应节点。
-动态 Project 可通过 `work_dispatch` 的 `project_id` 关联正式 Work；
-Workflow Project 必须由 `project_node_dispatch` 按冻结的节点派发。节点定义含稳定 ID、标题、意图、执行 Home、
-验收标准和 `after` 前置 ID；可指定 reviewer Home 与 reviewCriteria。创建时拒绝重名、未知前置与依赖环。
-lead 可用 `project_plan_amend` 提交完整的新 Workflow 定义；需匹配当前 Project 与 Workflow 修订号，
-账本保存旧版、新版、原因和发起 Session。已派发过 Work 的节点定义不可原地更改，现有节点不可删除；
-未派发节点可调整，新增节点需通过依赖环与执行 Home 校验。重试使用同一幂等键和内容。
-lead 也可用 `project_plan_propose` 提交待审阅草案；提案带来源 Session、原因、基础 Workflow 修订和执行轮次，
-仅增加 Project 修订，不改变可执行 Workflow。最新且仍匹配当前 Workflow 与轮次的提案会预填真人计划面板。
-真人可以编辑后按原地修订或暂停重建提交；正式修订引用提案键，仍执行现有授权、修订、现场和产物检查。
-可选真人计划路由还可带宿主提供的 reviewer Home 授权回调，调整自动推进或逐步确认约定。
-负责人需为逐步确认的每个未完成节点指定检查 Home；Work 提交结果时冻结当次约定、检查人和标准，
-后续模式变更只影响未来提交，已待审 Work 仍由原检查 Home 决定。未带冻结记录的旧 Work 保持原节点 reviewer 语义。
-每次真人确认生成稳定的 Project 推进入箱通知，送达 lead Home；写入失败保留 Project 变更并返回 `notification: pending`，插件启动及每次入箱扫描补投缺失通知和投递回执。lead Home 有明确 owner 和 Workspace 映射时由入箱运行器唤醒。
-节点检查的通过或返工决定也以 Project 和确切 Work 为稳定键通知 lead Home；检查决定先保存，入箱失败由同一扫描恢复。两类 Project 通知不计入普通信的话题深度和滞留催办。
-最终结果主张被负责人退回时，以 Project 和 claim 为稳定键通知 lead Home 核对完成标准并重新提交；验收通过不发继续工作的通知。返工审核已保存但入箱失败时由同一扫描恢复。
-`project_pause` 先写持久闸门，再取消 open/accepted 的关联 Work，按原请求方 Home 投递取消通知，
-并取消当前宿主已知的 Work worker 与 Seat Session。`completing` Work 不强行撤销，仍会阻止恢复；
-外部已发生的写入不会回滚。暂停时禁止新关联 Work、节点派工、结果提交和自动 Seat 唤醒。
-若宿主在写入闸门后中断，启动和后续 Work 恢复扫描会用原暂停事件继续取消剩余 Work、补投缺失通知，
-并重试中断当前宿主已知的项目 Session；失败记录为运行错误，Project 保持暂停。重复调用 `project_pause`
-也会重试清理，不会用重试时的新原因改写已有取消证据。隔离 Headless DSH 演练已在闸门后强制退出
-第一个进程，并由第二进程确认 Work 取消和通知恢复。
-`project_execution_supplement` 在当前 epoch 且未暂停时只接受 open 或 accepted Work。补充保存在原 Work，
-不创建新委托，也不改变执行 Home、目标或验收标准。若原 worker 尚未绑定，返回 pending；绑定后由周期恢复扫描
-投递到该 Session。相同 `request_id` 与内容只留存一次，已在 Session 中入列的提示也不会重复发送。
-投递表示信息已排队，不表示执行者已采纳。改变方向或依赖时应先暂停并修订计划。
-`project_execution_inspect` 联合读取正式账本与宿主 Session 状态；busy、unknown 与 quiet 只覆盖可检查的
-已知 Session，不能证明其他宿主或外部工作已静止。
-`project_request_human` 只用于确需人的判断、授权或人独有材料的阻塞问题。问题、原因、收件人、候选答案与
-证据引用进入 Project 审计；Project 状态为 `blocked`，主 Agent 的其他项目通知不会自动唤醒它，关联 Work
-仍可继续执行。缺失的真人信件由启动和周期扫描补投。本人可在真人 Inbox 选择候选答案或写其他回复；
-当主送人为其他真人时，lead Home 的 owner 同时收到抄送，也可代为答复；Project 审计记录实际作答者。
-`project_resume_autonomy` 必须指向主送人或该 owner 通过认证路由发出的确切回信，不能用 Agent 自述代替。
-此回信只证明答复者身份和内容；需要某个岗位或外部系统专属批准时，宿主仍须核验相应授权证据。
-回答后 Project 回到 `open`；若执行暂停闸门仍在，需按原静止检查另行恢复。
-普通 Home Session 可在每个执行轮次开始时调用 `project_turn_join`；账本冻结 Project、Home、Session 和 turn，
-手工正式 Work 的 accept/complete 也会记录当轮。暂停只中断当前仍属于该 Project turn 的普通 Session，
-不会因它后来处理其他轮次而误中断；恢复时要求参与过的轮次已有持久 `turn/end`。项目普通信发给
-lead Home 时，其自动唤醒和原 Session 回信也会等到恢复；新唤醒批次按 Project 区分，无关信件可独立派送。
-`project_plan_rebuild` 在暂停后使用完整的新 Workflow 定义和双修订号 CAS；必须先确认关联 Work 终结、取消
-通知已投递、已知 Session 静止。可移除节点或显式指定 `restart_node_ids`。被删除节点、指定返工节点、原本
-未完成节点及其在旧图或新图中的后代失效；其余已完成节点继承精确 Work ID。标题、检查人等定义变化本身
-不会暗中返工，需由 lead 明确指定。新 Work 使用恢复后的执行 epoch 和递增 attempt，旧 Work、审核与
-计划前后版本仍可追溯；读取当前节点进度不会把已失效的旧 Work 算作完成。连续重建会重新核算继承决定。
-`project_resume` 要求取消通知确实入箱、全部关联 Work 终结，且已知 Project Session 不在运行、没有排队消息或
-未终结的持久 turn；检查不可用时保持暂停。恢复会增加执行 epoch。检查覆盖正式 Work worker、Seat 通信
-Session 和已显式加入或认领正式 Work 的普通 Home turn；未加入的普通 Home 活动与跨宿主进程仍不可见，
-不能以此检查证明整个工作区静止。
-`project_read` 从正式 Work 和节点审阅推导 pending、ready、running、waiting、done；这里的 running 只表示责任
-尚未终结，**不证明 DSH Session 正在运行**。无 reviewer 的节点在 Work completed 后完成；指定 reviewer 的节点
-必须由其 Home 阅读精确结果并 approve 后才释放下游，rework 会让节点可派下一次 Work。取消的节点 Work 也可
-显式重派。同一 Home 也可执行自己的 Workflow 节点，但普通
-Inbox 信不能发给自己，直接派发的独立 Work 仍要求另一个 Home。
-执行 Home 可在完成正式 Work 时附上 `artifacts/` 下的文件；指定节点 reviewer 可读取冻结的文件字节。
-批准节点时会核对保留快照与原工作稿的摘要，工作稿在提交后改变或丢失时须要求返工。
-下游节点派发、Project 提交和最终接受还会重查上游已批准产物。产物改变时由 lead Home 调用
-`project_node_reopen`，说明原因并让当前已完成节点及其已完成下游重新派工；旧 Work、批准与回退记录保留。
-仍在执行的下游 Work 须先结算或取消；已提交的 Project 须先由 lead 返工，才能回退节点。
+邀请仅建立项目参与和读取权限，不代表接受正式 Work，也不启动 worker。执行 Home 仍有未结关联 Work 时不能释放其 Seat。
+关联正式 Work、提交结果和返工审阅只对 lead Home 开放。
 
-已提交或已接受的 Project 不能增加新 Work；动态 Project 对已有 Work 用原幂等键重试仍返回原责任。提交结果时拒绝未结
-Work，Workflow Project 还要求全部节点 done，并记录当时已完成或取消 Work 的状态与结果消息 ID。
+普通 Home Session 可在每个执行轮次开始时调用 `project_turn_join`；账本冻结 Project、Home、Session 和 turn，
+正式 Work 的 accept/complete 也会记录当轮。之后无关的轮次不受影响。
+
+已提交或已接受的 Project 不能增加新 Work；对已有 Work 用原幂等键重试仍返回原责任。提交结果时拒绝未结
+Work，并记录当时已完成或取消 Work 的状态与结果消息 ID。
 结果声明还须有至少一个可核验的产物快照，或一封已投递的正式 Work 结果信。产物路径必须是
-`artifacts/` 下的规范相对路径；每个文件最多 8 MiB，不接受符号链接。lead 或活跃 Seat 可先从各自绑定的
-Session Workspace 发布 `artifacts/`、`context/` 下文件或 `decisions.md`，每次提交须带当前 Project 修订、
-同路径上一 SHA-256 和幂等键。发布保存原始字节，增加 Project 修订；同路径旧版本可继续按版本读取。
-提交结果时，若路径已有发布版本，使用其最新快照；否则从 lead 当前 Workspace 读取。因此 Seat 发布的
-`artifacts/` 文件可由 lead 引入最终声明，无需复制到 lead Workspace。每次发布最多 8 MiB，项目最多
-保留 1000 次发布、100 个不同路径。Seat 释放后失去读取权限，但版本仍供项目审阅与恢复校验。
-意见引用发布工作稿的精确版本或当前待验收 claim 的固定文件 SHA-256；同一幂等键重试不能换正文或来源。
-意见先入 Project 账本，再投给 lead Home；Inbox 写入失败不丢意见，启动和周期扫描会补投。lead 以
-Project 修订号解决意见时须关联已发布的工作稿版本；旧意见、被审阅字节和解决记录保留。项目关闭或意见
-已解决后，旧通知不会启动新的负责人 Session。恢复包校验版本引用、原始字节和通知来源。
+`artifacts/` 下的规范相对路径，从 lead 当前绑定的 Session Workspace 读取；每个文件最多 8 MiB，不接受符号链接。
 提交时将原始字节保留在 Home 根目录，并在声明中冻结路径、长度和 SHA-256；`project_artifact_read` 可在
 源文件改变后按字节分页回读。接受前会再次校验快照，恢复包也校验声明与归档文件的一致性。
 返工保留旧声明和审阅，重新提交产生新版声明；接受时固定声明 ID。
 
-当前这是本地单用户 Home 授权的**审阅记录**，不能证明真人已查看或运行中 Agent 已停止。
-节点审阅由指定 Home 授权，仍不能证明真人身份；正式 Work 结果正文不自动生成文件快照。
-项目普通 Inbox 已用 Seat 地址路由和记录回执；Seat 唤醒 Session 与正式 Work worker 的提示会注入
-项目目标、完成标准、Seat 职责与地址，并要求读取最新 Project。实际执行仍绑定对应 Home；
-`project_delegate` 的正式 Work 通知仍经 Home Inbox 投递。普通 Home Session 没有专属 Project 绑定，
-当前尚无在暂停后删除节点、替换在途定义并保留有效完成节点的重建式修订，也没有多用户认证；Project 状态
-不应替代 DSH 运行状态。
+Agent 只能用 `project_review` 退回当前待验收声明；接受只能由真人经宿主认证的
+[Project 审核路由](project-review.md)完成。结果被退回时，以 Project 和 claim 为稳定键通知 lead Home 核对完成标准
+并重新提交；验收通过不发继续工作的通知。返工审核已保存但入箱失败时，启动和周期入箱扫描会补投。
+lead Home 的退回记录不能证明真人已查看，也不能证明运行中的 Agent 已停止。
+
+项目普通 Inbox 用 Seat 地址路由和记录回执；Seat 唤醒 Session 的提示会注入项目目标、完成标准、
+Seat 职责与地址，并要求读取最新 Project。实际执行仍绑定对应 Home；正式 Work 通知经 Home Inbox 投递并附 Project ID。
+普通 Home Session 没有专属 Project 绑定，也没有多用户认证；Project 状态不应替代 DSH 运行状态。
 
 ## 正式 Work
 
 | 工具 | 必填 | 可选与默认值 | 返回重点 |
 | --- | --- | --- | --- |
-| `bizagent_work_dispatch` | `to_address`、`goal`、`acceptance_criteria`、`idempotency_key` | `project_id` 引用当前 Home 的 open 动态 Project；`output_contract` 冻结指标报告来源 | 正式 `work`、请求 Inbox 通知与 worker 启动结果 |
+| `bizagent_work_dispatch` | `to_address`、`goal`、`acceptance_criteria`、`idempotency_key` | `project_id` 引用当前 Home 的 open Project；`output_contract` 冻结指标报告来源 | 正式 `work`、请求 Inbox 通知与 worker 启动结果 |
 | `bizagent_work` | 无 | `direction` 默认 assigned；`status`；`before_work_id`；`limit` 默认 20、最大 100 | 当前 Home 可见的责任记录和下一页游标 |
 | `bizagent_work_start` | `work_id` | 无 | 请求方重试启动/恢复已预留的 DSH worker Session |
 | `bizagent_work_accept` | `work_id` | 无 | 把指定 Work 独占绑定到当前目标 Home 的 DSH Session |
@@ -305,7 +216,7 @@ Session ID 与工作目录预留在 Work，并投递正式工作提示。已经�
 Session 不能替它完成或抢走责任；结果提交时先把
 唯一结果正文和消息 ID 预留为 `completing`，成功入箱后转 `completed`。并发提交或失败重试只能采用已预留的
 结果。可选 `artifact_refs` 在预留结果前从绑定 Workspace 核验并冻结；即使结果通知失败，恢复时也不会
-重新读取可能已变化的源文件。请求方、执行 Home 和指定的 Workflow 节点 reviewer 可按范围读取快照；
+重新读取可能已变化的源文件。请求方和执行 Home 可按范围读取快照；
 结果信附上路径引用，文件最多 8 MiB，不接受路径穿越或符号链接。
 `cancelled` 和 `completed` 是终态；请求方可在 `open` 或 `accepted` 时取消。请求/结果/取消通知都带单独的
 Inbox 投递回执，普通回复或标记已处理不会改变 Work 状态。

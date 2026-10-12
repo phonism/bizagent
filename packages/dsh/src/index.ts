@@ -23,8 +23,6 @@ import { LearningScheduler } from './learning-scheduler.js'
 import { InboxWakeRunner } from './inbox-wake-runner.js'
 import { InboxReturnNotifier } from './inbox-return-notifier.js'
 import { withAgentPreset } from './agent-preset.js'
-import { interruptProjectSessions } from './project-runtime.js'
-export { createProjectInterventionRuntimeHooks } from './project-runtime.js'
 import { loadActiveOrganizationLocation, type ActiveOrganizationLocation } from './organization-location.js'
 import { RuntimeWriterGuard } from './writer-guard.js'
 import { registerTools } from './tools.js'
@@ -44,8 +42,8 @@ export { evaluateWorkOutput } from './work-output-eval.js'
 export type { WorkOutputSourceEvaluation, WorkOutputVerdict } from './work-output-eval.js'
 export { WorkLedger, BIZAGENT_WORK_DOMAIN, FormalWorkSchema } from './work-ledger.js'
 export type { FormalWork } from './work-ledger.js'
-export { ProjectLedger, BIZAGENT_PROJECT_DOMAIN, FormalProjectSchema, ProjectWorkflowSchema, ProjectSeatSchema } from './project-ledger.js'
-export type { FormalProject, ProjectWorkflow, ProjectSeat } from './project-ledger.js'
+export { ProjectLedger, BIZAGENT_PROJECT_DOMAIN, FormalProjectSchema, ProjectSeatSchema } from './project-ledger.js'
+export type { FormalProject, ProjectSeat } from './project-ledger.js'
 export { WorklogLedger, BIZAGENT_WORKLOG_DOMAIN, WorklogRevisionSchema } from './worklog-ledger.js'
 export type { WorklogRevision } from './worklog-ledger.js'
 export { nextCronAt } from './cron.js'
@@ -54,17 +52,7 @@ export { BIZAGENT_PROPOSAL_REVIEW_API, createProposalReviewHttpHandler,
 export type { ProposalReviewPrincipal, ProposalReviewRouteOptions } from './proposal-review-transport.js'
 export { BIZAGENT_PROJECT_REVIEW_API } from './ui-contract.js'
 export { createProjectReviewHttpHandler, registerProjectReviewRoute } from './project-review-transport.js'
-export { createProjectDeliveryFeedbackHttpHandler, registerProjectDeliveryFeedbackRoute } from './project-delivery-feedback-transport.js'
-export type { ProjectDeliveryFeedbackPrincipal, ProjectDeliveryFeedbackRouteOptions } from './project-delivery-feedback-transport.js'
-export { createProjectRoleAssignmentHttpHandler, registerProjectRoleAssignmentRoute } from './project-role-assignment-transport.js'
-export type { ProjectRoleAssignmentPrincipal, ProjectRoleAssignmentRouteOptions } from './project-role-assignment-transport.js'
 export type { ProjectReviewPrincipal, ProjectReviewRouteOptions } from './project-review-transport.js'
-export { createProjectNodeReviewHttpHandler, registerProjectNodeReviewRoute } from './project-node-review-transport.js'
-export type { ProjectNodeReviewPrincipal, ProjectNodeReviewRouteOptions } from './project-node-review-transport.js'
-export { createProjectInterventionHttpHandler, registerProjectInterventionRoute } from './project-intervention-transport.js'
-export type { ProjectInterventionPrincipal, ProjectInterventionRouteOptions } from './project-intervention-transport.js'
-export { createProjectPlanHttpHandler, registerProjectPlanRoute } from './project-plan-transport.js'
-export type { ProjectPlanPrincipal, ProjectPlanRouteOptions } from './project-plan-transport.js'
 export { BizAgentService } from './service.js'
 export { WorkRunner } from './work-runner.js'
 export { LearningSessionRunner } from './learning-session-runner.js'
@@ -115,10 +103,10 @@ const LEARNING_POLICY = `BizAgent provides the long-term Home bound to this sess
 - Write only to the current Home. When learning belongs to another Personal, Business, Role, or Capability Home, create a proposal.
 - Use Inbox for ordinary asynchronous messages that need another Home to read or answer later. Read the pending digest with bizagent_inbox_read, reply with bizagent_inbox_send, and mark the incoming message handled only after review. Eligible owned and mapped primary recipients wake in a separate Session; delivery itself does not mean a wake succeeded or any work was completed. When a topic approaches its 6-hop or 12-message limit, finish the outcome in a Workspace file and send kind=conclusion with that file in context_refs instead of extending the relay.
 - When another Home must own a defined deliverable, create formal Work with a goal, acceptance criteria, and stable idempotency key. A mapped assignee Workspace lets BizAgent start an independent DSH worker Session. If launch is unavailable, the assignee must use bizagent_work_accept in the exact Session that will perform it. Complete with bizagent_work_complete; cite files under artifacts/ with artifact_refs to freeze their bytes. Use bizagent_work_output_eval for narrow checks on the frozen result, and bizagent_work_artifact_read to inspect the actual bytes before accepting it. An Inbox reply or handled receipt is not completion.
-- For a longer goal, create a Project with a concrete done_when standard. A dynamic Project can attach formal Work by project_id. A frozen Workflow Project dispatches ready nodes through bizagent_project_node_dispatch; node dependencies advance from completed formal Work and, when assigned, the reviewer Home's decision on the exact result. If an approved source artifact changes, the lead Home must use bizagent_project_node_reopen to record why the node and its completed descendants need new Work attempts. Submit a versioned result only after linked Work is terminal and every Workflow node is done; cite files under artifacts/ with artifact_refs to retain their exact bytes, or provide a delivered formal Work result. A lead Home review records acceptance or rework; Home review does not prove a human reviewed it or that DSH runtime activity stopped.
-- For Project collaboration, the lead can use bizagent_project_invite to give an active shared Home a durable Seat with a named responsibility and Project read access. An invitation does not accept or dispatch Work. In an open dynamic Project, the lead or an active Seat Home can use bizagent_project_delegate to invite another shared Home and create formal Work in one step. The Work records the Project Seat addresses, while execution stays in the assignee Home Workspace. The lead can release a Seat with bizagent_project_seat_release after its linked Work is settled.
+- For a longer goal, create a Project with a concrete done_when standard. The lead attaches formal Work to it by passing project_id to bizagent_work_dispatch; execution stays in the assignee Home Workspace. Submit a versioned result with bizagent_project_submit only after linked Work is terminal; cite files under artifacts/ with artifact_refs to retain their exact bytes, or provide a delivered formal Work result. Only a human can accept a submitted result, through the authenticated Project review route. The lead Home can only request rework with bizagent_project_review; that request does not prove a human reviewed the result or that DSH runtime activity stopped.
+- For Project collaboration, the lead can use bizagent_project_invite to give an active shared Home a durable Seat with a named responsibility and Project read access. An invitation does not accept or dispatch Work. The lead can release a Seat with bizagent_project_seat_release after its linked Work is settled.
 - For ordinary messages inside a Project, pass project_id to bizagent_inbox_send. Joined Agent Home recipients resolve to their Project Seat addresses; replies inherit the Project from reply_to and preserve historical recipient relationships. The sender and recipient Sessions still execute under their own Home bindings. An ordinary Inbox reply does not complete formal Project Work.
-- In an ordinary Home Session, call bizagent_project_turn_join with the Project ID before doing Project work in each turn. It records that exact turn for pause and resume inspection; later unrelated turns in the same Session remain independent. A formal Work accept records its current turn automatically. Joining does not grant new Project permissions.
+- In an ordinary Home Session, call bizagent_project_turn_join with the Project ID before doing Project work in each turn. It records that exact turn as Project participation; later unrelated turns in the same Session remain independent. A formal Work accept records its current turn automatically. Joining does not grant new Project permissions.
 - Record confirmation, contradiction, or failure when later work tests a recalled asset.
 - Never rewrite Identity automatically.`
 
@@ -195,11 +183,7 @@ async function applyLocked(ctx: Context, config: ResolvedConfig,
   const inboxWakeRunner = new InboxWakeRunner(sessionAgents, ctx.sessionQuery, service, config)
   const inboxReturnNotifier = new InboxReturnNotifier(sessionAgents, ctx.sessionQuery, ledger,
     (sessionId, error) => service.recordRuntimeError(`Inbox return ${sessionId}`, error),
-    address => service.inboxAddressHome(address, true),
-    (address, message) => !service.projectSeatPaused(address)
-      && !service.projectLeadWakeBlocked(message, address)
-      && (message.projectId === undefined || !service.projectExecutionPaused(message.projectId)
-        || service.projectHumanAnswerMessage(message, address)))
+    address => service.inboxAddressHome(address, true))
   let workRecoveryTimer: ReturnType<typeof setInterval> | undefined
   let learningRecoveryTimer: ReturnType<typeof setInterval> | undefined
   let learningScheduleTimer: ReturnType<typeof setInterval> | undefined
@@ -344,25 +328,9 @@ async function applyLocked(ctx: Context, config: ResolvedConfig,
     return task
   }
   const runInboxDelivery = async (): Promise<void> => {
-    const humanHandoffs = await service.reconcileProjectHumanHandoffs()
-    for (const failure of humanHandoffs.failed) {
-      service.recordRuntimeError(`Project human handoff ${failure.projectId}/${failure.handoffId}`, failure.error)
-    }
-    const progressionNotices = await service.reconcileProjectProgressionNotifications()
-    for (const failure of progressionNotices.failed) {
-      service.recordRuntimeError(`Project progression notice ${failure.projectId}/${failure.revision}`, failure.error)
-    }
-    const nodeDecisions = await service.reconcileProjectNodeDecisionNotifications()
-    for (const failure of nodeDecisions.failed) {
-      service.recordRuntimeError(`Project node decision notice ${failure.projectId}/${failure.workId}`, failure.error)
-    }
     const outcomeReworks = await service.reconcileProjectOutcomeReworkNotifications()
     for (const failure of outcomeReworks.failed) {
       service.recordRuntimeError(`Project outcome rework notice ${failure.projectId}/${failure.claimId}`, failure.error)
-    }
-    const deliveryFeedback = await service.reconcileProjectDeliveryFeedbackNotifications()
-    for (const failure of deliveryFeedback.failed) {
-      service.recordRuntimeError(`Project delivery feedback notice ${failure.projectId}/${failure.feedbackId}`, failure.error)
     }
     await runInboxReturn()
     await runInboxWake()
@@ -372,21 +340,6 @@ async function applyLocked(ctx: Context, config: ResolvedConfig,
       void runInboxDelivery().catch(error => service.recordRuntimeError('Inbox delivery kick', error))
     }
   })
-  const runProjectPauseRecovery = async (): Promise<void> => {
-    const result = await service.reconcilePausedProjects()
-    for (const item of result.repaired) {
-      const interruption = interruptProjectSessions(ctx.agents, service,
-        item.projectId, item.coordinatorSessionId ?? '')
-      for (const id of interruption.failed) {
-        service.recordRuntimeError(`Project pause interrupt ${item.projectId}/${id}`,
-          new Error('bound Project Session could not be interrupted'))
-      }
-    }
-    for (const failure of result.failed) {
-      service.recordRuntimeError(`Project pause recovery ${failure.projectId}`, failure.error)
-    }
-  }
-  await runProjectPauseRecovery()
   const worklogStartupRecovery = await service.reconcileCompletedWorklogs()
   for (const failure of worklogStartupRecovery.failed) {
     service.recordRuntimeError(`Worklog recovery ${failure.workId}`, failure.error)
@@ -398,22 +351,18 @@ async function applyLocked(ctx: Context, config: ResolvedConfig,
   let workRecoveryPass: Promise<void> | undefined
   const runWorkRecovery = (): Promise<void> => {
     if (workRecoveryPass) return workRecoveryPass
-    const task = runProjectPauseRecovery().then(async () => {
+    const task = (async () => {
       const workNotices = await service.reconcileWorkNotifications()
       for (const failure of workNotices.failed) {
         service.recordRuntimeError(`Work notice ${failure.phase} ${failure.workId}`, failure.error)
       }
       return workRunner.recoverBatch()
-    }).then(async result => {
+    })().then(async result => {
       for (const failure of result.reserved.failed) {
         service.recordRuntimeError(`Work recovery ${failure.workId}`, failure.error)
       }
       for (const failure of result.queued.failed) {
         service.recordRuntimeError(`Work queued recovery ${failure.workId}`, failure.error)
-      }
-      const supplements = await workRunner.recoverSupplements()
-      for (const failure of supplements.failed) {
-        service.recordRuntimeError(`Project Work supplement recovery ${failure.workId}`, failure.error)
       }
       const logs = await service.reconcileCompletedWorklogs()
       for (const failure of logs.failed) {

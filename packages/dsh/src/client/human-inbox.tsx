@@ -135,12 +135,6 @@ export function HumanInboxDashboard({ api, t }: { api: BizAgentUiPort; t: T }) {
                 {detail.message.humanAction ? <div className="ba-inbox-action">
                   <strong>{detail.message.humanAction.request}</strong>
                   <p>{detail.message.humanAction.reason}</p>
-                  {detail.message.humanAction.options ? <div className="ba-inbox-options">
-                    {detail.message.humanAction.options.map(option => <button type="button" key={option.label}
-                      disabled={!canReply || busy} onClick={() => { setBody(option.label); setReplyKey(newReplyKey()) }}>
-                      <strong>{option.label}</strong>{option.detail ? <small>{option.detail}</small> : null}
-                    </button>)}
-                  </div> : null}
                   {detail.message.humanAction.href ? <a href={detail.message.humanAction.href}>
                     {detail.message.humanAction.label ?? t('humanInbox.openAction')}</a> : null}
                 </div> : null}

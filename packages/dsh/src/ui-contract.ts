@@ -25,36 +25,6 @@ export const BIZAGENT_AGENT_DIRECTORY_API = `${BIZAGENT_UI_API}/agents`
 export const BIZAGENT_PROJECT_REVIEW_API = '/api/bizagent/project-review'
 export const BIZAGENT_LOCAL_HUMAN_STATUS_API = '/api/bizagent/local-human/status'
 export const BIZAGENT_AGENT_SESSION_API = '/api/bizagent/agent-session'
-export const BIZAGENT_PROJECT_DELIVERY_FEEDBACK_API = '/api/bizagent/project-delivery-feedback'
-export const BIZAGENT_PROJECT_ROLE_ASSIGNMENTS_API = '/api/bizagent/project-role-assignments'
-export const BIZAGENT_PROJECT_NODE_REVIEW_API = '/api/bizagent/project-node-review'
-export const BIZAGENT_PROJECT_INTERVENTION_API = '/api/bizagent/project-intervention'
-export const BIZAGENT_PROJECT_PLAN_API = '/api/bizagent/project-plan'
-
-export interface UiProjectRoleAssignmentAccess {
-  projectId: string
-  projectRevision: number
-  revision: number
-  canManage: boolean
-  roles: Array<{ roleHome: string; responsibility: string }>
-  bindings: Array<{ roleHome: string; principal: string; byPrincipal: string; at: string }>
-  suggestions: Array<{ id: string; roleHome: string; proposedPrincipal: string;
-    reason: string; bySessionId: string; at: string;
-    status: 'pending' | 'accepted' | 'rejected' | 'superseded' }>
-  candidates?: Array<{ id: string; label: string }>
-}
-
-export interface UiProjectDeliveryFeedbackAccess {
-  projectId: string
-  revision: number
-  canFeedback: boolean
-  workingAssets: Array<{ path: string; revision: number; sha256: string; bytes: number }>
-  submitted: { claimId: string; artifacts: Array<{ path: string; sha256: string; bytes: number }> } | null
-  feedback: Array<{ id: string; path: string; version: 'working' | 'submitted' | 'accepted'
-    sha256: string; section?: string; body: string; at: string
-    bySessionId?: string; byPrincipal?: string
-    resolution?: { reply: string; path: string; workingRevision: number; sha256: string; at: string } }>
-}
 
 export interface UiProjectReviewAccess {
   canReview: boolean
@@ -73,56 +43,6 @@ export interface UiProjectOutcomeReviewInbox {
     artifacts: Array<{ path: string; sha256: string; bytes: number }>
   }>
   nextOffset?: number
-}
-export interface UiProjectNodeReviewAccess {
-  canReview: boolean
-  revision: number
-  workId: string | null
-}
-export interface UiProjectNodeReviewInbox {
-  items: Array<{
-    projectId: string; projectTitle: string; revision: number
-    nodeId: string; nodeTitle: string; reviewCriteria: string; reviewerHome: string
-    workId: string; completedAt: string; resultSubject: string; resultBody: string
-    resultArtifacts: Array<{ path: string; sha256: string; bytes: number }>
-    assignedPrincipal?: string
-  }>
-  nextOffset?: number
-}
-export interface UiProjectInterventionAccess {
-  revision: number
-  canPause: boolean
-  canResume: boolean
-}
-export interface UiProjectPlanAccess {
-  revision: number
-  workflowRevision: number | null
-  canSetProgression?: boolean
-  progressionNotification?: { revision: number; state: 'pending' | 'delivered' }
-  canAmend: boolean
-  canRebuild: boolean
-  canReopen: boolean
-  canReassign?: boolean
-  reviewerCandidates?: Array<{ userId: string; name: string }>
-}
-export interface UiProjectPlanStep {
-  id: string; title: string; intent: string; executor: string
-  acceptanceCriteria: string; after: string[]
-  reviewer?: string | undefined; reviewCriteria?: string | undefined
-}
-export type UiProjectPlanAction = { action: 'progression'; projectId: string;
-  expectedRevision: number; mode: 'automatic' | 'reviewed'; reason: string
-  reviewers: Array<{ nodeId: string; reviewerHome: string }>
-} | { action: 'reopen'; projectId: string;
-  expectedRevision: number; nodeId: string; reason: string } | {
-  action: 'reassign'; projectId: string; expectedRevision: number
-  nodeId: string; workId: string; expectedPrincipal: string | null
-  assignedPrincipal: string; reason: string
-} | {
-  action: 'amend' | 'rebuild'; projectId: string; expectedRevision: number
-  expectedWorkflowRevision: number; reason: string; idempotencyKey: string
-  proposalKey?: string
-  restartNodeIds?: string[]; workflow: { summary: string; steps: UiProjectPlanStep[] }
 }
 export const BIZAGENT_FRAME_STATUS_API = `${BIZAGENT_UI_API}/frames`
 export const BIZAGENT_HUMAN_INBOX_API = '/api/bizagent/human-inbox'
@@ -292,19 +212,10 @@ export interface UiApiError {
 export interface UiProjectList {
   homeAddress: HomeAddress
   projects: FormalProject[]
-  progress: Record<string, NonNullable<UiProjectDetail['workflow']>>
   nextBeforeProjectId?: string
 }
 
 export interface UiProjectDetail {
   project: FormalProject
   work: FormalWork[]
-  workflow?: {
-    nodes: Array<{
-      id: string; title: string; executor: string; after: string[]
-      status: 'pending' | 'ready' | 'running' | 'waiting' | 'done'
-      attempts: number; latestWorkId?: string; latestWorkStatus?: FormalWork['status']
-    }>
-    readyNodeIds: string[]
-  }
 }

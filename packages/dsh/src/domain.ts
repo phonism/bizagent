@@ -34,18 +34,10 @@ export type InboxSenderAddress = InboxAddress | 'engine:inbox'
 export const HumanActionSchema = z.strictObject({
   request: z.string().trim().min(1).max(3000),
   reason: z.string().trim().min(1).max(3000),
-  options: z.array(z.strictObject({
-    label: z.string().trim().min(1).max(80),
-    detail: z.string().trim().max(200).optional(),
-  })).min(2).max(6).optional(),
   recommendation: z.string().trim().min(1).max(3000).optional(),
   href: z.string().max(2000).optional(),
   label: z.string().trim().min(1).max(80).optional(),
 }).superRefine((action, context) => {
-  if (action.options !== undefined
-    && new Set(action.options.map(option => option.label)).size !== action.options.length) {
-    context.addIssue({ code: 'custom', path: ['options'], message: 'human action option labels must be unique' })
-  }
   if (action.href === undefined) return
   try {
     const decoded = decodeURIComponent(action.href)
@@ -488,25 +480,15 @@ export const InboxMessageSchema = z.object({
   cc: z.array(InboxAddressSchema).max(8),
   subject: z.string().min(1).max(200),
   body: z.string().min(1).max(16000),
-  kind: z.enum(['ordinary', 'project-progression', 'project-node-decision', 'project-outcome-rework', 'project-delivery-feedback', 'conclusion', 'escalation', 'work-request', 'work-result', 'work-notice',
+  kind: z.enum(['ordinary', 'project-outcome-rework', 'conclusion', 'escalation', 'work-request', 'work-result', 'work-notice',
     'turn-complete']),
   priority: z.enum(['normal', 'urgent']),
   due: z.string().min(1).optional(),
   contextRefs: z.array(z.string().min(1).max(500)).max(16),
   humanAction: HumanActionSchema.optional(),
   humanTurn: HumanTurnProvenanceSchema.optional(),
-  projectProgression: z.strictObject({
-    projectId: z.string().min(1), revision: z.number().int().positive(),
-    lead: HomeAddressSchema,
-  }).optional(),
-  projectNodeDecision: z.strictObject({
-    projectId: z.string().min(1), workId: z.string().min(1), lead: HomeAddressSchema,
-  }).optional(),
   projectOutcomeRework: z.strictObject({
     projectId: z.string().min(1), claimId: z.string().min(1), lead: HomeAddressSchema,
-  }).optional(),
-  projectDeliveryFeedback: z.strictObject({
-    projectId: z.string().min(1), feedbackId: z.string().min(1), lead: HomeAddressSchema,
   }).optional(),
   automaticEscalation: z.object({
     sourceMessageId: z.string().min(1),
@@ -540,34 +522,6 @@ export const InboxMessageSchema = z.object({
     context.addIssue({ code: 'custom', path: ['humanTurn'],
       message: 'turn completion needs durable Session provenance' })
   }
-  if (message.projectProgression && (message.kind !== 'project-progression'
-    || message.fromAddress !== 'engine:inbox'
-    || message.projectId !== message.projectProgression.projectId
-    || message.id !== stableId('project-progression',
-      `${message.projectProgression.projectId}:${message.projectProgression.revision}`)
-    || message.to.length !== 1 || message.to[0] !== message.projectProgression.lead
-    || message.cc.length !== 0 || message.priority !== 'urgent')) {
-    context.addIssue({ code: 'custom', path: ['projectProgression'],
-      message: 'Project progression notice must target its lead Home with stable provenance' })
-  }
-  if (message.kind === 'project-progression' && !message.projectProgression) {
-    context.addIssue({ code: 'custom', path: ['projectProgression'],
-      message: 'Project progression notice needs durable Project provenance' })
-  }
-  if (message.projectNodeDecision && (message.kind !== 'project-node-decision'
-    || message.fromAddress !== 'engine:inbox'
-    || message.projectId !== message.projectNodeDecision.projectId
-    || message.id !== stableId('project-node-decision',
-      `${message.projectNodeDecision.projectId}:${message.projectNodeDecision.workId}`)
-    || message.to.length !== 1 || message.to[0] !== message.projectNodeDecision.lead
-    || message.cc.length !== 0 || message.priority !== 'urgent')) {
-    context.addIssue({ code: 'custom', path: ['projectNodeDecision'],
-      message: 'Project node decision notice must target its lead Home with stable provenance' })
-  }
-  if (message.kind === 'project-node-decision' && !message.projectNodeDecision) {
-    context.addIssue({ code: 'custom', path: ['projectNodeDecision'],
-      message: 'Project node decision notice needs durable Project provenance' })
-  }
   if (message.projectOutcomeRework && (message.kind !== 'project-outcome-rework'
     || message.fromAddress !== 'engine:inbox'
     || message.projectId !== message.projectOutcomeRework.projectId
@@ -581,20 +535,6 @@ export const InboxMessageSchema = z.object({
   if (message.kind === 'project-outcome-rework' && !message.projectOutcomeRework) {
     context.addIssue({ code: 'custom', path: ['projectOutcomeRework'],
       message: 'Project outcome rework notice needs durable Project provenance' })
-  }
-  if (message.projectDeliveryFeedback && (message.kind !== 'project-delivery-feedback'
-    || message.fromAddress !== 'engine:inbox'
-    || message.projectId !== message.projectDeliveryFeedback.projectId
-    || message.id !== stableId('project-delivery-feedback',
-      `${message.projectDeliveryFeedback.projectId}:${message.projectDeliveryFeedback.feedbackId}`)
-    || message.to.length !== 1 || message.to[0] !== message.projectDeliveryFeedback.lead
-    || message.cc.length !== 0 || message.priority !== 'urgent')) {
-    context.addIssue({ code: 'custom', path: ['projectDeliveryFeedback'],
-      message: 'Project delivery feedback notice must target its lead Home with stable provenance' })
-  }
-  if (message.kind === 'project-delivery-feedback' && !message.projectDeliveryFeedback) {
-    context.addIssue({ code: 'custom', path: ['projectDeliveryFeedback'],
-      message: 'Project delivery feedback notice needs durable Project provenance' })
   }
 })
 

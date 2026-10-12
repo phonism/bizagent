@@ -25,8 +25,7 @@ export class InboxReturnNotifier {
     private readonly ledger: LearningLedger,
     private readonly onError: (sessionId: string, error: unknown) => void = () => {},
     private readonly recipientHome: (address: AgentInboxAddress) => HomeAddress | undefined
-      = address => isHomeAddress(address) ? address : undefined,
-    private readonly canQueue: (address: AgentInboxAddress, message: InboxMessage) => boolean = () => true) {}
+      = address => isHomeAddress(address) ? address : undefined) {}
 
   async recoverBatch(limit = MAX_PER_PASS, now = Date.now()): Promise<ReturnPass> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PER_PASS) {
@@ -49,7 +48,6 @@ export class InboxReturnNotifier {
       if (this.closing || attempted >= limit) break
       const recipient = replyReturnRecipient(this.ledger, message)
       if (recipient === undefined) continue
-      if (!this.canQueue(recipient, message)) continue
       if (this.ledger.getInboxDelivery(message.id, recipient)?.handledAt !== undefined) continue
       const destination = inboxReturnDestination(this.ledger, message, recipient)
       if (destination === undefined) continue

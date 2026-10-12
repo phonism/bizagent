@@ -57,7 +57,7 @@ Frame 可用唯一显示名打开，同名时必须指定规范地址。此目�
 不可变正文、收件地址、回复线程与逐收件人投递状态保存在学习账本 metadata。收件方只能读和处理投递给
 自己的信，发件方可以查看其投递结果。新启动的已绑定 Session 会注入待处理信头摘要，不注入正文。
 指定 Project ID 的普通通信会验证 lead 或活跃 Seat 资格，将已加入的目标 Home 解析为项目 Seat 地址；
-消息、投递回执、唤醒计划和回信路由保留 Seat 地址，执行 Session 仍绑定席位对应的 Home Workspace。Seat 唤醒 Session 和正式 Work worker 的提示
+消息、投递回执、唤醒计划和回信路由保留 Seat 地址，执行 Session 仍绑定席位对应的 Home Workspace。Seat 唤醒 Session 的提示
 从当前 Project 修订注入项目目标、完成标准、Seat 职责及 Home 边界；地址不改变工具权限。
 回复继承项目上下文并保留原发件地址；释放后的 Seat Home 可读历史投递，不能发新的项目信，
 未启动的席位唤醒会跳过。旧 Home 地址信仍沿旧地址回复。
@@ -107,37 +107,18 @@ AgentHandle，完成后待空闲释放，卸载时也释放自身持有的句柄
 旧记录没有自动启动意图时不主动启动。
 Work worker 的唤醒来源固定为请求消息 ID，因此它发出的普通 Inbox 信即使不带 `reply_to`，也继承这一话题预算。
 完成 Work 时可从执行 Session 的绑定 Workspace 冻结 `artifacts/` 文件；路径、SHA-256 与长度先写入结果预留，
-通知失败后沿原预留恢复。请求方、执行 Home 与指定 Workflow 节点 reviewer 可回读精确快照；
-节点 approve 还会核对源文件仍与提交时相同。下游派工、Project 提交与接受重查有效批准的产物；
-lead Home 的回退事件会保留旧 Work 与审阅记录，并使该节点及已完成下游重新派工。
+通知失败后沿原预留恢复。请求方与执行 Home 可回读精确快照；Project 接受时会重查引用 Work 的快照。
 目前没有跨进程 CAS；认领 ID 不证明 Session 仍在执行，通知投递也不证明真实执行。
 
 Project 另用 `bizagent_project` domain 保存 lead Home、目标、完成标准、关联 Work 的提交时状态快照，以及每版
 结果声明和接受/返工记录。lead 可邀请活跃共享 Home 加入有稳定地址和责任说明的 Project Seat，变更与释放留在
-Project 修订历史中；活跃 Seat Home 可读取 Project、节点与结果产物。邀请不产生正式 Work，Project 普通 Inbox
-使用 Seat 地址，Work worker 仍按 Home 地址执行。动态项目的 lead 或活跃 Seat Home 可以通过 `project_delegate` 邀请目标并派正式 Work；
-Work 冻结目标 Seat 地址及已有的请求方 Seat 地址，通知送达目标 Home，worker 仍在目标 Home Workspace 执行。
-只有 lead Home 能直接关联动态 Work、派 Workflow 节点或提交；Agent 可退回当前结果主张，最终接受须经
+Project 修订历史中；活跃 Seat Home 可读取 Project、关联 Work 与结果产物。邀请不产生正式 Work，Project 普通 Inbox
+使用 Seat 地址，Work worker 仍按 Home 地址执行。
+只有 lead Home 能关联 Work 或提交；Agent 只能退回当前结果主张，最终接受须经
 宿主认证的真人审核。提交与新增 Work 在本进程的 Project 写队列中串行。提交时需有已投递的正式 Work
 结果，或冻结在 Home 的本地文件产物；验收前核对文件快照。已接受不证明所有 DSH 进程已停止。
-创建 Project 时可冻结有向无环 Workflow 定义。lead 可在项目开放时以双修订号 CAS 追加
-计划修订，保留完整前后定义和原因；已有 Work 的节点定义被冻结，未派发节点和新节点可调整。
-暂停先持久写入 Project 干预历史，再取消 open/accepted 的关联 Work 并补投取消通知；
-若宿主在两步之间中断，启动及 30 秒 Work 恢复扫描会沿用原暂停原因补齐取消与通知，并再次中断
-当前宿主仍运行的已知项目 Session；未完成或失败时仍保持暂停。此路径已由服务重开、插件启动测试，
-以及隔离 Headless DSH 在闸门后收到 `SIGKILL`、第二进程恢复同一 profile 的故障演练验证。
-Work runner、Seat 唤醒、发给 lead Home 的项目普通信唤醒与原 Session 回信在暂停期间不启动新执行。
-普通 Home Session 可显式记录当前 Project turn，手工 Work 认领和提交也会记录；暂停只中断仍在执行该
-turn 的普通 Session，恢复核验其持久 `turn/end`，后续无关轮次不受旧项目关联影响。恢复须核对所有关联 Work 已终结、
-取消通知已投递，以及当前宿主已知 Work/Seat Session 已静止，未知状态拒绝恢复；恢复递增执行 epoch。
-暂停且静止时可用双修订号 CAS 重建 Workflow，删除节点、显式返工或改依赖；旧新图中受影响的后代
-失效，独立的已完成节点按精确 Work ID 继承。新 Work 带执行 epoch，当前进度不会复用失效的旧结果，
-而旧 Work 与审核仍保留审计。未加入项目的普通 Home turn 不可见，
-因此这项静止检查仍不覆盖任意 Home 会话，也不跨主机。节点本身不维护另一套执行状态；每次派发形成带节点 ID 与尝试序号的
-正式 Work，读取时从最后一次 Work 与审阅记录推导节点状态。可指定 reviewer Home 对精确 Work 结果 approve
-或 rework；有 reviewer 的前置节点批准后才可派下游，取消或返工可显式重派。回退已完成节点会同时使其已完成
-下游的当前 Work 失效；在途下游 Work 须先结算或取消。Project 结果提交要求所有节点完成。
-真人审核路由要求宿主接入身份与当前 Project 授权；默认本地 UI 不提供这种身份边界。推导出的 running
+普通 Home Session 可显式记录当前 Project turn，手工 Work 认领和提交也会记录；后续无关轮次不受旧项目关联影响。
+真人审核路由要求宿主接入身份与当前 Project 授权；默认本地 UI 不提供这种身份边界。Work 状态
 不是实时进程证明。
 
 ## Session 与 Workspace 的关系
@@ -168,7 +149,7 @@ Workspace 提供工作目录；Home 提供长期学习的归属。多个 Session
 | Worklog 修订、Session 指纹与文件哈希 | DSH `storageDomain` 的独立 `bizagent_worklog` domain | 恢复可搜索工作摘要，重读 DSH Session 和 Workspace 文件以核验来源 |
 | Worklog 文件版本快照 | Home 根目录 `worklog-snapshots/sha256/` | 随 Home 归档保留原始字节，按 Home 权限回读，恢复包校验快照引用 |
 | Project 结果文件快照 | Home 根目录 `project-snapshots/sha256/` | 冻结每版结果声明的本地文件字节，验收和恢复时核验 |
-| 正式 Work 结果文件快照 | Home 根目录 `work-snapshots/sha256/` | 与唯一结果预留绑定，节点审阅和恢复时核验 |
+| 正式 Work 结果文件快照 | Home 根目录 `work-snapshots/sha256/` | 与唯一结果预留绑定，Project 验收和恢复时核验 |
 | 主动事件与行动回执 | DSH `storageDomain` 的独立 `bizagent_proactive` domain | 恢复待处理信号、裁决和至多一次行动记录 |
 | Pulse 指标、运行与数值 | DSH `storageDomain` 的独立 `bizagent_pulse` domain | 恢复指标版本和已完成取数 |
 | 订阅提议、约定、每期 Work 与触发回执 | DSH `storageDomain` 的独立 `bizagent_subscription` domain | 恢复排程和冻结 Work；重启后核查中途启动的 Session |

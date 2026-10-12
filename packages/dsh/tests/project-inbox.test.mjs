@@ -134,81 +134,6 @@ test('Project Inbox routes active Homes to Seats and preserves historical Home r
     analystSeat.address)
 })
 
-test('a paused Project holds lead Home Inbox wake without delaying unrelated Home mail', async t => {
-  const { root, runtime, config, service, lead, analyst, outsider, project } = await setup(t)
-  config.workspaceHomes.push({ root, address: 'personal:alice' })
-  const projectMail = await service.sendInboxMessage(analyst, 'paused-lead-project-mail', {
-    projectId: project.id, to: ['personal:alice'], subject: 'Project update',
-    body: 'Review this after resuming.', priority: 'urgent',
-  })
-  const unrelated = await service.sendInboxMessage(outsider, 'unrelated-lead-mail', {
-    to: ['personal:alice'], subject: 'Unrelated update',
-    body: 'This can run now.', priority: 'urgent',
-  })
-  const current = (await service.readProject(lead, project.id)).project
-  const paused = await service.pauseProject(lead, { projectId: project.id,
-    expectedProjectRevision: current.revision, reason: 'Hold Project execution.' })
-  const prompts = []
-  const live = new Map()
-  const agents = {
-    get(id) { return live.get(String(id)) },
-    async create(options) {
-      const agent = readyAgent(runtime.agent(String(options.sessionId), options.meta.cwd, 'Home wake.'), prompts)
-      live.set(String(agent.id), agent)
-      return { agent, async dispose() { live.delete(String(agent.id)) } }
-    },
-    async resume() { throw new Error('unexpected resume') },
-  }
-  const wake = new InboxWakeRunner(agents, runtime.sessionQuery, service, config)
-  const before = await wake.recoverBatch(2, Date.now())
-  assert.equal(before.failed.length, 0)
-  assert.equal(before.started.length, 1)
-  assert.equal(runtime.ledger.getInboxWakePlan(before.started[0]).messageIds[0], unrelated.message.id)
-  assert.equal(prompts.some(prompt => JSON.stringify(prompt).includes(projectMail.message.id)), false)
-  await wake.close()
-  await service.resumeProject(lead, { projectId: project.id,
-    expectedProjectRevision: paused.project.revision },
-  async () => ({ status: 'quiet', sessionIds: [] }))
-  const resumedWake = new InboxWakeRunner(agents, runtime.sessionQuery, service, config)
-  const after = await resumedWake.recoverBatch(1, Date.now())
-  assert.equal(after.failed.length, 0)
-  assert.equal(after.started.length, 1)
-  assert.equal(runtime.ledger.getInboxWakePlan(after.started[0]).messageIds[0], projectMail.message.id)
-  await resumedWake.close()
-})
-
-test('Project reply waits before returning to its original Home Session during pause', async t => {
-  const { runtime, service, lead, analyst, project } = await setup(t)
-  const origin = await service.sendInboxMessage(lead, 'return-origin', {
-    projectId: project.id, to: ['role:analyst'], subject: 'Review this',
-    body: 'Reply with a finding.', priority: 'urgent',
-  })
-  const reply = await service.sendInboxMessage(analyst, 'return-reply', {
-    to: ['personal:alice'], subject: 'Finding', body: 'One finding.',
-    replyTo: origin.message.id, priority: 'urgent',
-  })
-  const current = (await service.readProject(lead, project.id)).project
-  const paused = await service.pauseProject(lead, { projectId: project.id,
-    expectedProjectRevision: current.revision, reason: 'Hold Project replies.' })
-  const prompts = []
-  const liveLead = readyAgent(lead, prompts)
-  const agents = { get(id) { return id === lead.id ? liveLead : undefined },
-    async resume() { throw new Error('unexpected resume') } }
-  const notifier = new InboxReturnNotifier(agents, runtime.sessionQuery, runtime.ledger,
-    () => {}, address => service.inboxAddressHome(address),
-    (address, message) => !service.projectSeatPaused(address)
-      && (message.projectId === undefined || !service.projectExecutionPaused(message.projectId)))
-  assert.deepEqual((await notifier.recoverBatch()).queued, [])
-  assert.equal(prompts.length, 0)
-  await service.resumeProject(lead, { projectId: project.id,
-    expectedProjectRevision: paused.project.revision },
-  async () => ({ status: 'quiet', sessionIds: [] }))
-  assert.deepEqual((await notifier.recoverBatch()).queued, [reply.message.id])
-  assert.equal(prompts.length, 1)
-  assert.match(JSON.stringify(prompts[0]), new RegExp(reply.message.id))
-  await notifier.close()
-})
-
 test('Project Seat Inbox wake binds the Home and a reply returns to the original Seat Session', async t => {
   const { runtime, config, service, lead, analyst, checker,
     project, analystSeat, checkerSeat } = await setup(t)
@@ -338,41 +263,10 @@ test('a released Seat cancels a reserved ordinary Inbox wake without starting a 
   await runner.close()
 })
 
-test('a paused Project holds Seat Inbox wake plans until the lead resumes execution', async t => {
-  const { runtime, config, service, lead, project, analystSeat } = await setup(t)
-  const sent = await service.sendInboxMessage(lead, 'pause-seat-mail', {
-    projectId: project.id, to: ['role:analyst'], subject: 'Review later',
-    body: 'Read this after the project resumes.', priority: 'urgent',
-  })
-  const paused = await service.pauseProject(lead, { projectId: project.id,
-    expectedProjectRevision: (await service.readProject(lead, project.id)).project.revision,
-    reason: 'Check the project plan.' })
-  const prompts = []
-  const live = new Map()
-  const runner = new InboxWakeRunner({
-    get(id) { return live.get(String(id)) },
-    async create(options) {
-      const agent = readyAgent(runtime.agent(String(options.sessionId), options.meta.cwd, 'Seat wake.'), prompts)
-      live.set(String(agent.id), agent)
-      return { agent, async dispose() { live.delete(String(agent.id)) } }
-    },
-    async resume() { throw new Error('unexpected resume') },
-  }, runtime.sessionQuery, service, config)
-  assert.deepEqual((await runner.recoverBatch()).started, [])
-  assert.equal(runtime.ledger.listInboxWakePlans().length, 0)
-  await service.resumeProject(lead, { projectId: project.id,
-    expectedProjectRevision: paused.project.revision }, async () => ({ status: 'quiet', sessionIds: [] }))
-  const recovered = await runner.recoverBatch()
-  assert.equal(recovered.started.length, 1)
-  assert.equal(runtime.ledger.getInboxWakePlan(recovered.started[0]).recipient, analystSeat.address)
-  assert.match(prompts[0].content[0].text, new RegExp(sent.message.id))
-  await runner.close()
-})
-
-test('formal Project Work worker receives its Seat contract while retaining its Home binding', async t => {
-  const { runtime, config, service, lead, project, analystSeat } = await setup(t)
-  const delegated = await service.delegateProjectWork(lead, {
-    projectId: project.id, toAddress: 'role:analyst', responsibility: 'Analyze',
+test('formal Project Work worker accepts in its own turn while retaining its Home binding', async t => {
+  const { runtime, config, service, lead, project } = await setup(t)
+  const dispatched = await service.dispatchWork(lead, {
+    projectId: project.id, toAddress: 'role:analyst',
     goal: 'Analyze the evidence', acceptanceCriteria: 'Return source findings.',
     idempotencyKey: 'project-inbox-work',
   })
@@ -392,7 +286,7 @@ test('formal Project Work worker receives its Seat contract while retaining its 
   }
   const runner = new WorkRunner(agents, runtime.sessionQuery, service, config,
     () => ({ provider: 'local-smoke', model: 'smoke-model' }))
-  const started = await runner.start(lead, delegated.work.id)
+  const started = await runner.start(lead, dispatched.work.id)
   assert.equal(started.work.status, 'open')
   assert.deepEqual(started.work.workerOptions, { provider: 'local-smoke', model: 'smoke-model' })
   assert.deepEqual(workerModels, [{ provider: 'local-smoke', model: 'smoke-model' }])
@@ -400,10 +294,6 @@ test('formal Project Work worker receives its Seat contract while retaining its 
   const prompt = prompts[0].content[0].text
   assert.match(prompt, /Formal Work assigned to this Agent Home/)
   assert.match(prompt, /bizagent_work_accept in this turn/)
-  assert.match(prompt, /Project Seat context/)
-  assert.ok(prompt.includes(`Your Seat address: ${analystSeat.address}`))
-  assert.match(prompt, /Your responsibility: Analyze/)
-  assert.match(prompt, /Project goal: Coordinate the review\./)
-  assert.match(prompt, /An ordinary reply does not complete formal Work/)
+  assert.match(prompt, /An ordinary Inbox reply does not complete formal Work/)
   await runner.close()
 })

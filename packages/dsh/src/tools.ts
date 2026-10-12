@@ -6,7 +6,6 @@ import type { InboxMessage } from './domain.js'
 import type { WorkRunner } from './work-runner.js'
 import type { LearningSessionRunner } from './learning-session-runner.js'
 import type { FormalWork } from './work-ledger.js'
-import { inspectProjectRuntime, interruptProjectSessions } from './project-runtime.js'
 
 const JSON_OUTPUT = {
   schema: { type: 'json' as const },
@@ -445,48 +444,16 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
 
   ctx.tools.register(defineTool({
     name: 'bizagent_project_create',
-    description: 'Create one durable Project owned by the current Home, with a goal and completion standard. Optionally freeze a Workflow dependency graph. Reuse the idempotency key on retry.',
+    description: 'Create one durable Project owned by the current Home, with a goal and completion standard. Reuse the idempotency key on retry.',
     parameters: {
       title: { type: 'string', required: true },
       goal: { type: 'string', required: true },
       done_when: { type: 'string', required: true, description: 'Concrete completion standard for later review.' },
       idempotency_key: { type: 'string', required: true },
-      workflow: {
-        type: 'object', additionalProperties: false,
-        properties: {
-          summary: { type: 'string', required: true },
-          steps: {
-            type: 'array', required: true,
-            items: {
-              type: 'object', additionalProperties: false,
-              properties: {
-                id: { type: 'string', required: true },
-                title: { type: 'string', required: true },
-                intent: { type: 'string', required: true },
-                executor: { type: 'string', required: true },
-                acceptance_criteria: { type: 'string', required: true },
-                after: { type: 'array', items: { type: 'string' } },
-                reviewer: { type: 'string', description: 'Optional Home that must review this node result.' },
-                review_criteria: { type: 'string', description: 'What the assigned reviewer should check.' },
-              },
-            },
-          },
-        },
-      },
     },
     output: JSON_OUTPUT,
     execute: async (args, exec) => jsonResult(service.createProject(requireAgent(exec.agent), {
       title: args.title, goal: args.goal, doneWhen: args.done_when, idempotencyKey: args.idempotency_key,
-      ...(args.workflow !== undefined ? { workflow: {
-        summary: args.workflow.summary,
-        steps: args.workflow.steps.map(step => ({
-          id: step.id, title: step.title, intent: step.intent, executor: step.executor,
-          acceptanceCriteria: step.acceptance_criteria,
-          ...(step.after !== undefined ? { after: step.after } : {}),
-          ...(step.reviewer !== undefined ? { reviewer: step.reviewer } : {}),
-          ...(step.review_criteria !== undefined ? { reviewCriteria: step.review_criteria } : {}),
-        })),
-      } } : {}),
     })),
   }))
 
@@ -494,14 +461,14 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
     name: 'bizagent_projects',
     description: 'List Projects led by the current Home or visible through an active Project Seat. A Project status is not evidence that DSH agents are currently running.',
     parameters: {
-      status: { type: 'string', enum: ['open', 'blocked', 'awaiting_acceptance', 'accepted'] },
+      status: { type: 'string', enum: ['open', 'awaiting_acceptance', 'accepted'] },
       before_project_id: { type: 'string', description: 'Pagination cursor returned as nextBeforeProjectId.' },
       limit: { type: 'integer', description: 'Maximum 100 Projects; defaults to 20.' },
     },
     output: JSON_OUTPUT,
     isConcurrencySafe: () => true,
     execute: async (args, exec) => jsonResult(service.listProjects(requireAgent(exec.agent), {
-      ...(args.status !== undefined ? { status: args.status as 'open' | 'blocked' | 'awaiting_acceptance' | 'accepted' } : {}),
+      ...(args.status !== undefined ? { status: args.status as 'open' | 'awaiting_acceptance' | 'accepted' } : {}),
       ...(args.before_project_id !== undefined ? { beforeProjectId: args.before_project_id } : {}),
       ...(args.limit !== undefined ? { limit: args.limit } : {}),
     })),
@@ -517,300 +484,11 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
   }))
 
   ctx.tools.register(defineTool({
-    name: 'bizagent_project_execution_inspect',
-    description: 'Read fresh Project execution state, linked Work and Workflow progress, plus known active or uncertain DSH Sessions. Excludes this coordinator Session from the runtime check.',
-    parameters: { project_id: { type: 'string', required: true } },
-    output: JSON_OUTPUT,
-    isConcurrencySafe: () => true,
-    execute: async (args, exec) => {
-      const agent = requireAgent(exec.agent)
-      const { project, work, workflow } = await service.readProject(agent, args.project_id)
-      const runtime = await inspectProjectRuntime(ctx.agents, ctx.sessionQuery, service,
-        args.project_id, String(agent.id))
-      return JSON.parse(JSON.stringify({
-        projectId: project.id, status: project.status, projectRevision: project.revision,
-        executionEpoch: project.intervention?.epoch ?? 0,
-        paused: project.intervention?.paused ?? false,
-        intervention: project.intervention,
-        humanHandoff: project.humanHandoffs?.at(-1),
-        workflow,
-        work: work.map(item => ({ id: item.id, status: item.status,
-          requester: item.requester, assignee: item.assignee,
-          workflowNodeId: item.workflowNodeId, workflowAttempt: item.workflowAttempt,
-          workerSessionId: item.workerSessionId, resultMessageId: item.resultMessageId,
-          requestMessageId: item.requestMessageId, updatedAt: item.updatedAt })),
-        claims: project.claims.map(item => ({ id: item.id,
-          submittedAt: item.submittedAt, artifacts: item.artifacts })),
-        workingAssets: project.workingAssets,
-        runtime, excludedCoordinatorSessionId: String(agent.id),
-      })) as JsonValue
-    },
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_request_human',
-    description: 'As Project lead, stop autonomous Project progress when a specific human judgment, authorization or human-only material is required. Ask one answerable question. Give 2–6 options for a decision; omit options when requesting material. The human receives it in their authenticated Inbox; the lead Home owner also receives a copy and may answer when they are different people. The reply alone does not prove person-specific authorization. End this turn after requesting.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-      request_id: { type: 'string', required: true },
-      question: { type: 'string', required: true },
-      reason: { type: 'string', required: true },
-      assignee: { type: 'string', description: 'user:<id> or an active Role Home with a confirmed principal; defaults to the lead Home owner.' },
-      context_refs: { type: 'array', items: { type: 'string' } },
-      options: { type: 'array', items: { type: 'object', additionalProperties: false,
-        properties: { label: { type: 'string', required: true }, detail: { type: 'string' } } } },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.requestProjectHuman(requireAgent(exec.agent), {
-      projectId: args.project_id, expectedProjectRevision: args.expected_project_revision,
-      requestId: args.request_id, question: args.question, reason: args.reason,
-      ...(args.assignee === undefined ? {} : { assignee: args.assignee }),
-      ...(args.context_refs === undefined ? {} : { contextRefs: args.context_refs }),
-      ...(args.options === undefined ? {} : { options: args.options }),
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_resume_autonomy',
-    description: 'As Project lead, resume autonomous Project progress using an exact delivered reply from the assigned human or the copied lead Home owner. A claim in Agent text is insufficient. If execution is still paused, inspect and resume it separately.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      handoff_id: { type: 'string', required: true },
-      reply_message_id: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.resumeProjectAutonomy(requireAgent(exec.agent), {
-      projectId: args.project_id, handoffId: args.handoff_id,
-      replyMessageId: args.reply_message_id, expectedProjectRevision: args.expected_project_revision,
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_execution_supplement',
-    description: 'As Project lead, retain a short supplement for open linked Work and queue it in the original worker Session. Delivery does not mean adoption. Pause and revise when the direction or dependencies change.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      work_id: { type: 'string', required: true },
-      expected_epoch: { type: 'integer', required: true },
-      request_id: { type: 'string', required: true },
-      message: { type: 'string', required: true },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => {
-      const recorded = await service.supplementProjectWork(requireAgent(exec.agent), {
-        projectId: args.project_id, workId: args.work_id,
-        expectedEpoch: args.expected_epoch, requestId: args.request_id, message: args.message,
-      })
-      const supplement = recorded.supplement as { id: string }
-      try {
-        const delivery = await workRunner.deliverSupplement(args.work_id, supplement.id)
-        return JSON.parse(JSON.stringify({ ...recorded, delivery })) as JsonValue
-      } catch (error) {
-        service.recordRuntimeError(`Project Work supplement ${supplement.id}`, error)
-        return JSON.parse(JSON.stringify({ ...recorded, delivery: 'pending',
-          deliveryError: error instanceof Error ? error.message : String(error) })) as JsonValue
-      }
-    },
-  }))
-
-  ctx.tools.register(defineTool({
     name: 'bizagent_project_turn_join',
-    description: 'Bind the current DSH turn to an open Project before doing Project work in an ordinary Home Session. A pause can interrupt this turn; unrelated later turns remain independent. Repeat in each new Project turn.',
+    description: 'Bind the current DSH turn to an open Project before doing Project work in an ordinary Home Session. Unrelated later turns remain independent. Repeat in each new Project turn.',
     parameters: { project_id: { type: 'string', required: true } },
     output: JSON_OUTPUT,
     execute: async (args, exec) => jsonResult(service.joinProjectTurn(requireAgent(exec.agent), args.project_id)),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_plan_propose',
-    description: 'As Project lead, submit a versioned plan proposal for human review. This records a draft only; it does not change the executable Workflow or grant execution rights. Use current Project and Workflow revisions.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-      expected_workflow_revision: { type: 'integer', required: true },
-      reason: { type: 'string', required: true },
-      idempotency_key: { type: 'string', required: true },
-      workflow: {
-        type: 'object', required: true, additionalProperties: false,
-        properties: {
-          summary: { type: 'string', required: true },
-          steps: { type: 'array', required: true, items: {
-            type: 'object', additionalProperties: false, properties: {
-              id: { type: 'string', required: true }, title: { type: 'string', required: true },
-              intent: { type: 'string', required: true }, executor: { type: 'string', required: true },
-              acceptance_criteria: { type: 'string', required: true },
-              after: { type: 'array', items: { type: 'string' } },
-              reviewer: { type: 'string' }, review_criteria: { type: 'string' },
-            },
-          } },
-        },
-      },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.proposeProjectWorkflow(requireAgent(exec.agent), {
-      projectId: args.project_id,
-      expectedProjectRevision: args.expected_project_revision,
-      expectedWorkflowRevision: args.expected_workflow_revision,
-      reason: args.reason, idempotencyKey: args.idempotency_key,
-      workflow: {
-        summary: args.workflow.summary,
-        steps: args.workflow.steps.map(step => ({
-          id: step.id, title: step.title, intent: step.intent, executor: step.executor,
-          acceptanceCriteria: step.acceptance_criteria,
-          ...(step.after !== undefined ? { after: step.after } : {}),
-          ...(step.reviewer !== undefined ? { reviewer: step.reviewer } : {}),
-          ...(step.review_criteria !== undefined ? { reviewCriteria: step.review_criteria } : {}),
-        })),
-      },
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_plan_amend',
-    description: 'As the lead of an open Workflow Project, append an audited plan revision. Only new or never-dispatched nodes may change; use the current Project and Workflow revisions as a compare-and-set guard. Dispatched Work remains governed by its original node definition.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-      expected_workflow_revision: { type: 'integer', required: true },
-      reason: { type: 'string', required: true },
-      idempotency_key: { type: 'string', required: true },
-      workflow: {
-        type: 'object', required: true, additionalProperties: false,
-        properties: {
-          summary: { type: 'string', required: true },
-          steps: {
-            type: 'array', required: true,
-            items: {
-              type: 'object', additionalProperties: false,
-              properties: {
-                id: { type: 'string', required: true },
-                title: { type: 'string', required: true },
-                intent: { type: 'string', required: true },
-                executor: { type: 'string', required: true },
-                acceptance_criteria: { type: 'string', required: true },
-                after: { type: 'array', items: { type: 'string' } },
-                reviewer: { type: 'string' },
-                review_criteria: { type: 'string' },
-              },
-            },
-          },
-        },
-      },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.amendProjectWorkflow(requireAgent(exec.agent), {
-      projectId: args.project_id,
-      expectedProjectRevision: args.expected_project_revision,
-      expectedWorkflowRevision: args.expected_workflow_revision,
-      reason: args.reason, idempotencyKey: args.idempotency_key,
-      workflow: {
-        summary: args.workflow.summary,
-        steps: args.workflow.steps.map(step => ({
-          id: step.id, title: step.title, intent: step.intent, executor: step.executor,
-          acceptanceCriteria: step.acceptance_criteria,
-          ...(step.after !== undefined ? { after: step.after } : {}),
-          ...(step.reviewer !== undefined ? { reviewer: step.reviewer } : {}),
-          ...(step.review_criteria !== undefined ? { reviewCriteria: step.review_criteria } : {}),
-        })),
-      },
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_pause',
-    description: 'As Project lead, persist an execution pause before cancelling unsettled linked Work and interrupting known Project worker and Seat Sessions. Prior external effects remain. Repeating a pause retries cleanup.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-      reason: { type: 'string', required: true },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => {
-      const agent = requireAgent(exec.agent)
-      const result = await service.pauseProject(agent, {
-        projectId: args.project_id, expectedProjectRevision: args.expected_project_revision,
-        reason: args.reason,
-      })
-      const interruption = interruptProjectSessions(ctx.agents, service, args.project_id, String(agent.id))
-      for (const workId of result.cancelledWorkIds as string[]) workRunner.releaseWhenIdle(workId)
-      return JSON.parse(JSON.stringify({ ...result, interruption })) as JsonValue
-    },
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_plan_rebuild',
-    description: 'As the lead of a paused Workflow Project, rebuild its plan after linked Work and known Sessions are quiet. Removed and restarted nodes invalidate descendants; valid completed Work is retained with its evidence. Uses both current revisions.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-      expected_workflow_revision: { type: 'integer', required: true },
-      reason: { type: 'string', required: true },
-      idempotency_key: { type: 'string', required: true },
-      restart_node_ids: { type: 'array', items: { type: 'string' } },
-      workflow: {
-        type: 'object', required: true, additionalProperties: false,
-        properties: {
-          summary: { type: 'string', required: true },
-          steps: {
-            type: 'array', required: true,
-            items: {
-              type: 'object', additionalProperties: false,
-              properties: {
-                id: { type: 'string', required: true },
-                title: { type: 'string', required: true },
-                intent: { type: 'string', required: true },
-                executor: { type: 'string', required: true },
-                acceptance_criteria: { type: 'string', required: true },
-                after: { type: 'array', items: { type: 'string' } },
-                reviewer: { type: 'string' },
-                review_criteria: { type: 'string' },
-              },
-            },
-          },
-        },
-      },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => {
-      const agent = requireAgent(exec.agent)
-      return jsonResult(service.rebuildProjectWorkflow(agent, {
-        projectId: args.project_id,
-        expectedProjectRevision: args.expected_project_revision,
-        expectedWorkflowRevision: args.expected_workflow_revision,
-        reason: args.reason, idempotencyKey: args.idempotency_key,
-        ...(args.restart_node_ids !== undefined ? { restartNodeIds: args.restart_node_ids } : {}),
-        workflow: {
-          summary: args.workflow.summary,
-          steps: args.workflow.steps.map(step => ({
-            id: step.id, title: step.title, intent: step.intent, executor: step.executor,
-            acceptanceCriteria: step.acceptance_criteria,
-            ...(step.after !== undefined ? { after: step.after } : {}),
-            ...(step.reviewer !== undefined ? { reviewer: step.reviewer } : {}),
-            ...(step.review_criteria !== undefined ? { reviewCriteria: step.review_criteria } : {}),
-          })),
-        },
-      }, () => inspectProjectRuntime(ctx.agents, ctx.sessionQuery, service,
-        args.project_id, String(agent.id))))
-    },
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_resume',
-    description: 'As Project lead, resume a paused Project only after all linked Work is terminal, cancellation notices are delivered, and known Project Sessions are verifiably quiet. Uses the current Project revision.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => {
-      const agent = requireAgent(exec.agent)
-      return jsonResult(service.resumeProject(agent, {
-        projectId: args.project_id, expectedProjectRevision: args.expected_project_revision,
-      }, () => inspectProjectRuntime(ctx.agents, ctx.sessionQuery, service,
-        args.project_id, String(agent.id))))
-    },
   }))
 
   ctx.tools.register(defineTool({
@@ -838,127 +516,6 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
     output: JSON_OUTPUT,
     execute: async (args, exec) => jsonResult(service.releaseProjectSeat(requireAgent(exec.agent), {
       projectId: args.project_id, seatAddress: args.seat_address,
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_role_suggest',
-    description: 'Suggest a registered human principal for an active Project Role Seat. The suggestion needs a reason and never grants access; an authorized human manager decides it.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      role_home: { type: 'string', required: true },
-      proposed_principal: { type: 'string', required: true },
-      reason: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-      idempotency_key: { type: 'string', required: true },
-    }, output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.suggestProjectRolePrincipal(requireAgent(exec.agent), {
-      projectId: args.project_id, roleHome: args.role_home,
-      proposedPrincipal: args.proposed_principal, reason: args.reason,
-      expectedProjectRevision: args.expected_project_revision, idempotencyKey: args.idempotency_key,
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_delegate',
-    description: 'In an open dynamic Project, the lead or an active Seat Home invites another shared Home to a Seat and creates one formal Work responsibility. The Work retains the assignee Seat address and, when the requester is a Seat, its address; the assignee executes in its Home Workspace. A mapped Workspace attempts to start a worker Session.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      to_address: { type: 'string', required: true, description: 'Another shared Agent Home address.' },
-      responsibility: { type: 'string', required: true, description: 'The assignee Seat role in this Project.' },
-      goal: { type: 'string', required: true },
-      acceptance_criteria: { type: 'string', required: true },
-      idempotency_key: { type: 'string', required: true },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => {
-      const agent = requireAgent(exec.agent)
-      const result = await service.delegateProjectWork(agent, {
-        projectId: args.project_id, toAddress: args.to_address, responsibility: args.responsibility,
-        goal: args.goal, acceptanceCriteria: args.acceptance_criteria,
-        idempotencyKey: args.idempotency_key,
-      })
-      const work = result.work as FormalWork | undefined
-      if (work?.status !== 'open' || work.autoStart !== true) return JSON.parse(JSON.stringify(result)) as JsonValue
-      try {
-        const workerLaunch = await workRunner.start(agent, work.id)
-        return JSON.parse(JSON.stringify({ ...result, workerLaunch })) as JsonValue
-      } catch (error) {
-        service.recordRuntimeError(`Project Work start ${work.id}`, error)
-        return JSON.parse(JSON.stringify({ ...result, workerLaunch: {
-          status: 'failed', reason: error instanceof Error ? error.message : String(error),
-        } })) as JsonValue
-      }
-    },
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_node_read',
-    description: 'As Project lead, active Seat Home, or the assigned reviewer Home, read one frozen Workflow node and its latest formal Work result before a decision.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      node_id: { type: 'string', required: true },
-    },
-    output: JSON_OUTPUT,
-    isConcurrencySafe: () => true,
-    execute: async (args, exec) => jsonResult(service.readProjectNode(requireAgent(exec.agent), {
-      projectId: args.project_id, nodeId: args.node_id,
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_node_dispatch',
-    description: 'As Project lead, dispatch one ready frozen Workflow node as formal Work to its executor Home. Dependencies must have completed. A mapped Workspace attempts to start a DSH worker Session.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      node_id: { type: 'string', required: true },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => {
-      const agent = requireAgent(exec.agent)
-      const result = await service.dispatchProjectNode(agent, { projectId: args.project_id, nodeId: args.node_id })
-      const work = result.work as FormalWork | undefined
-      if (work?.status !== 'open' || work.autoStart !== true) return JSON.parse(JSON.stringify(result)) as JsonValue
-      try {
-        const workerLaunch = await workRunner.start(agent, work.id)
-        return JSON.parse(JSON.stringify({ ...result, workerLaunch })) as JsonValue
-      } catch (error) {
-        service.recordRuntimeError(`Workflow node start ${work.id}`, error)
-        return JSON.parse(JSON.stringify({ ...result, workerLaunch: {
-          status: 'failed', reason: error instanceof Error ? error.message : String(error),
-        } })) as JsonValue
-      }
-    },
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_node_review',
-    description: 'As the node\'s assigned reviewer Home, approve the latest completed Work result or request a new Work attempt. Record the exact Work and result message ID. This local Home decision does not prove human identity.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      node_id: { type: 'string', required: true },
-      work_id: { type: 'string', required: true },
-      decision: { type: 'string', required: true, enum: ['approve', 'rework'] },
-      reason: { type: 'string', required: true },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.reviewProjectNode(requireAgent(exec.agent), {
-      projectId: args.project_id, nodeId: args.node_id, workId: args.work_id,
-      decision: args.decision as 'approve' | 'rework', reason: args.reason,
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_node_reopen',
-    description: 'As Project lead, reopen a completed Workflow node and its completed descendants for new formal Work attempts. Records why prior results were superseded; active descendant Work must settle first.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      node_id: { type: 'string', required: true },
-      reason: { type: 'string', required: true },
-    },
-    output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.reopenProjectNode(requireAgent(exec.agent), {
-      projectId: args.project_id, nodeId: args.node_id, reason: args.reason,
     })),
   }))
 
@@ -996,99 +553,6 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
       projectId: args.project_id, claimId: args.claim_id, path: args.path,
       ...(args.offset !== undefined ? { offset: args.offset } : {}),
       ...(args.limit !== undefined ? { limit: args.limit } : {}),
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_asset_publish',
-    description: 'Publish one current Project working file from this Session Workspace into an immutable shared version. Lead and active Seat Homes may publish; use Project revision and previous SHA-256 to prevent overwrites.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      path: { type: 'string', required: true,
-        description: 'Canonical file under artifacts/ or context/, or decisions.md.' },
-      expected_project_revision: { type: 'integer', required: true },
-      expected_previous_sha256: { type: 'string',
-        description: 'Latest published SHA-256 when replacing this path; omit for a new path.' },
-      idempotency_key: { type: 'string', required: true },
-    }, output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.publishProjectWorkingAsset(requireAgent(exec.agent), {
-      projectId: args.project_id, path: args.path,
-      expectedProjectRevision: args.expected_project_revision,
-      expectedPreviousSha256: args.expected_previous_sha256 ?? null,
-      idempotencyKey: args.idempotency_key,
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_asset_read',
-    description: 'Read a bounded byte range from a published Project working asset version. The source Workspace file may have changed or disappeared.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      path: { type: 'string', required: true },
-      revision: { type: 'integer', description: 'Specific asset revision; latest when omitted.' },
-      offset: { type: 'integer', description: 'Byte offset, defaults to 0.' },
-      limit: { type: 'integer', description: 'Maximum bytes, from 1 to 65536. Defaults to 8192.' },
-    }, output: JSON_OUTPUT, isConcurrencySafe: () => true,
-    execute: async (args, exec) => jsonResult(service.readProjectWorkingAsset(requireAgent(exec.agent), {
-      projectId: args.project_id, path: args.path,
-      ...(args.revision !== undefined ? { revision: args.revision } : {}),
-      ...(args.offset !== undefined ? { offset: args.offset } : {}),
-      ...(args.limit !== undefined ? { limit: args.limit } : {}),
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_delivery_feedback',
-    description: 'Comment on the exact current SHA-256 of a published Project working asset or pending submitted artifact. The opinion and reviewed bytes are retained and the lead Home is notified.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      path: { type: 'string', required: true },
-      version: { type: 'string', required: true, enum: ['working', 'submitted'] },
-      expected_sha256: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-      idempotency_key: { type: 'string', required: true },
-      section: { type: 'string' },
-      body: { type: 'string', required: true },
-    }, output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.addProjectDeliveryFeedback(requireAgent(exec.agent), {
-      projectId: args.project_id, path: args.path, version: args.version,
-      expectedSha256: args.expected_sha256, expectedProjectRevision: args.expected_project_revision,
-      idempotencyKey: args.idempotency_key,
-      ...(args.section === undefined ? {} : { section: args.section }), body: args.body,
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_delivery_feedback_read',
-    description: 'Read the exact retained bytes reviewed in one Project delivery feedback opinion.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      feedback_id: { type: 'string', required: true },
-      offset: { type: 'integer' },
-      limit: { type: 'integer' },
-    }, output: JSON_OUTPUT, isConcurrencySafe: () => true,
-    execute: async (args, exec) => jsonResult(service.readProjectDeliveryFeedbackSnapshot(requireAgent(exec.agent), {
-      projectId: args.project_id, feedbackId: args.feedback_id,
-      ...(args.offset === undefined ? {} : { offset: args.offset }),
-      ...(args.limit === undefined ? {} : { limit: args.limit }),
-    })),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'bizagent_project_delivery_feedback_resolve',
-    description: 'As the Project lead, resolve one delivery opinion with a reason and an exact published working asset version. The opinion and reviewed snapshot remain in history.',
-    parameters: {
-      project_id: { type: 'string', required: true },
-      feedback_id: { type: 'string', required: true },
-      expected_project_revision: { type: 'integer', required: true },
-      reply: { type: 'string', required: true },
-      path: { type: 'string', required: true },
-      working_revision: { type: 'integer', required: true },
-    }, output: JSON_OUTPUT,
-    execute: async (args, exec) => jsonResult(service.resolveProjectDeliveryFeedback(requireAgent(exec.agent), {
-      projectId: args.project_id, feedbackId: args.feedback_id,
-      expectedProjectRevision: args.expected_project_revision,
-      reply: args.reply, path: args.path, workingRevision: args.working_revision,
     })),
   }))
 
@@ -1206,7 +670,7 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
 
   ctx.tools.register(defineTool({
     name: 'bizagent_work_artifact_read',
-    description: 'Read a bounded byte range from a completed formal Work result artifact snapshot. Available to requester, assignee, and the assigned Workflow node reviewer.',
+    description: 'Read a bounded byte range from a completed formal Work result artifact snapshot. Available to requester and assignee.',
     parameters: {
       work_id: { type: 'string', required: true },
       path: { type: 'string', required: true, description: 'Artifact path recorded in the Work result.' },

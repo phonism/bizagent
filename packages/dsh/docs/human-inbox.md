@@ -41,9 +41,6 @@ registerHumanInboxRoute(ctx.webServer, ctx.bizagent, {
 创建第二封回复。宿主未挂载路由或未授权时显示不可用；页面本身不建立真人登录。
 
 真人回信保留原信的处理状态，直到本人显式 `handle`；回信作为新机器话题的起点，原始话题预算归零。
-Project 的 `project_request_human` 问题可在 `human_action.options` 附 2–6 个候选答案；页面选择会填入回信正文，
-本人也可改写。若主送人不是 lead Home 的 owner，owner 会收到抄送并可代答。Project 账本在 lead Agent
-用主送人或 owner 的确切回信 ID 调用 `project_resume_autonomy` 后才结束等待状态，并记录实际作答者。
 它主送原发件 Agent Home，插件的 return-to 恢复器会优先向原发件 Session 注入正文；原 Session
 确实不可恢复时，才按该 Home 的 Workspace 与 owner 条件尝试新 Session。写入回执、注入回执和
 Agent 实际处理仍是不同事实。宿主应展示信箱，不能只依赖外部通知。

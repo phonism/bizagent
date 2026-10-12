@@ -356,7 +356,7 @@ test('UI host remains a separate optional Cordis adapter', async (t) => {
   assert.equal(routes.size, 0)
 })
 
-test('Project UI routes retain Session Home visibility and return workflow progress', async t => {
+test('Project UI routes retain Session Home visibility', async t => {
   const root = await makeTempDir('bizagent-ui-projects-')
   t.after(() => rm(root, { recursive: true, force: true }))
   const runtime = await createDemoRuntime()
@@ -375,10 +375,7 @@ test('Project UI routes retain Session Home visibility and return workflow progr
   runtime.agent('ui-project-bob', join(root, 'bob'), 'Read available projects.')
   const project = (await service.createProject(lead, {
     title: 'Evidence review', goal: 'Collect evidence.', doneWhen: 'Evidence is accepted.',
-    idempotencyKey: 'ui-project-review', workflow: { summary: 'Collect and check', steps: [{
-      id: 'collect', title: 'Collect', intent: 'Gather source material.',
-      executor: 'personal:alice', acceptanceCriteria: 'Sources recorded.',
-    }] },
+    idempotencyKey: 'ui-project-review',
   })).project
   const routes = new Map()
   applyUiHost({ bizagent: service, sessionQuery: runtime.sessionQuery,
@@ -395,10 +392,8 @@ test('Project UI routes retain Session Home visibility and return workflow progr
   assert.equal(mine.status, 200)
   assert.equal(mine.body.homeAddress, 'personal:alice')
   assert.deepEqual(mine.body.projects.map(item => item.id), [project.id])
-  assert.equal(mine.body.progress[project.id].nodes[0].status, 'ready')
   const detail = await get(`/api/bizagent/v1/projects/detail?sessionId=ui-project-lead&projectId=${project.id}`)
   assert.equal(detail.status, 200)
-  assert.equal(detail.body.workflow.nodes[0].status, 'ready')
   assert.equal(detail.body.project.goal, 'Collect evidence.')
   const other = await get('/api/bizagent/v1/projects?sessionId=ui-project-bob')
   assert.deepEqual(other.body.projects, [])

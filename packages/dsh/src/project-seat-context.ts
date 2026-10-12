@@ -8,7 +8,6 @@ export interface ProjectSeatContext {
   goal: string
   doneWhen: string
   status: FormalProject['status']
-  mode: 'dynamic' | 'workflow'
   lead: HomeAddress
   seatAddress: ProjectSeatAddress
   homeAddress: HomeAddress
@@ -19,7 +18,7 @@ export function projectSeatContext(project: FormalProject, seat: ProjectSeat): P
   return {
     projectId: project.id, projectRevision: project.revision,
     title: project.title, goal: project.goal, doneWhen: project.doneWhen,
-    status: project.status, mode: project.workflow === undefined ? 'dynamic' : 'workflow',
+    status: project.status,
     lead: project.lead, seatAddress: seat.address as ProjectSeatAddress,
     homeAddress: seat.homeAddress, responsibility: seat.responsibility,
   }
@@ -32,7 +31,6 @@ export function renderProjectSeatContext(context: ProjectSeatContext): string {
     `Project ID: ${context.projectId}`,
     `Project revision: ${context.projectRevision}`,
     `Project status: ${context.status}`,
-    `Project mode: ${context.mode}`,
     `Project title: ${context.title}`,
     `Project lead: ${context.lead}`,
     `Your Seat address: ${context.seatAddress}`,
@@ -42,10 +40,7 @@ export function renderProjectSeatContext(context: ProjectSeatContext): string {
     `Done when: ${context.doneWhen}`,
     '',
     'This Session uses the execution Home above. The Seat address routes and attributes Project messages; it does not change tool authority.',
-    'Read the current Project with bizagent_project_read before relying on its plan, Work, or artifacts. The revision above may become stale.',
+    'Read the current Project with bizagent_project_read before relying on its Work or artifacts. The revision above may become stale.',
     'For a Project reply, use bizagent_inbox_send with reply_to. A new Project message needs project_id. An ordinary reply does not complete formal Work.',
-    ...(context.mode === 'dynamic'
-      ? ['Use bizagent_project_delegate only when another shared Home must own a separately reviewable result.']
-      : ['Workflow nodes are dispatched by the Project lead; read the node and its formal Work before acting.']),
   ].join('\n')
 }
