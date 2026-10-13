@@ -108,11 +108,15 @@ export class InboxReturnNotifier {
     }
     try {
       if (!hasPrompt(agent, message, recipient)) {
-        agent.followup(freezeMessage({
+        const prompt = freezeMessage({
           id: returnPromptId(message, recipient), role: 'user',
           content: [{ type: 'text', text: renderReturnPrompt(message) }],
           source: { kind: 'bizagent', form: 'relay' },
-        }))
+        })
+        // A Session still working (often waiting for this very result) reads it at its next step;
+        // a queued follow-up would start another turn after it had already handled the result.
+        if (agent.status === 'running') agent.steer(prompt)
+        else agent.followup(prompt)
       }
       await this.ledger.putInboxReturnRoute({
         schemaVersion: 1, messageId: message.id, recipient, sessionId: destination,

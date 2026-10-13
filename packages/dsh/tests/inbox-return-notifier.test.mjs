@@ -103,6 +103,35 @@ test('ordinary reply returns to exact live or persisted sender Session and avoid
   await notifier.close()
 })
 
+test('a sender Session still running reads the reply at its next step instead of another turn', async t => {
+  const { runtime, service, alice, reviewer, original } = await setup(t)
+  const reply = await service.sendInboxMessage(reviewer, 'reply-running', {
+    to: ['personal:alice'], subject: 'Review result', body: 'Arrives while Alice is still working.',
+    replyTo: original.message.id, priority: 'urgent',
+  })
+  const followups = []
+  const steered = []
+  readyAgent(alice, followups)
+  alice.status = 'running'
+  alice.steer = message => {
+    steered.push(message)
+    alice.inbox.nextStep.push(message)
+  }
+  const agents = {
+    get(id) { return String(id) === alice.id ? alice : undefined },
+    async resume() { throw new Error('a live Session must not be resumed') },
+  }
+  const notifier = new InboxReturnNotifier(agents, runtime.sessionQuery, runtime.ledger)
+  assert.deepEqual((await notifier.recoverBatch()).queued, [reply.message.id])
+  assert.equal(followups.length, 0)
+  assert.equal(steered.length, 1)
+  assert.match(steered[0].content[0].text, /Arrives while Alice is still working/)
+  // The steered prompt counts as delivered, so later passes do not send it again.
+  assert.deepEqual((await notifier.recoverBatch()).queued, [])
+  assert.equal(steered.length, 1)
+  await notifier.close()
+})
+
 test('missing return-to Session falls back immediately even when the recipient carries normal mail', async t => {
   const { runtime, store, config, service, reviewer, original } = await setup(t)
   await writeFile(join(store.homesRoot, store.getHome('personal:alice').id, 'inbox.json'),
