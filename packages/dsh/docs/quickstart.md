@@ -93,8 +93,7 @@ You own all of them. The Organization page then shows a five-minute guide. Each 
    it came from.
 2. **Start a Project.** Ask the growth lead to create the "Q3 GMV check" Project.
 3. **Run it and accept the result.** In **Projects**, open the Project chat and ask it to run: it
-   invites the analyst, hands over formal Work, and the analyst computes GMV in its own session
-   from `orders.csv`. When the Project chat submits the result, accept it in **Projects**. The
+   hands formal Work to the analyst, who computes GMV in its own session from `orders.csv`. When the Project chat submits the result, accept it in **Projects**. The
    correct GMV is 400.50.
 4. **Share what was learned.** Ask the analyst to propose the GMV rule to the Sample Shop Home,
    then accept the proposal under **Learning → Sample Shop**.

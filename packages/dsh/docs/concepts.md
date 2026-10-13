@@ -141,8 +141,9 @@ Work statuses: `open` → `accepted` → `completing` → `completed`, or `cance
 A **Project** is a longer goal with a written "done when" standard. Its lead Home creates it; the
 Project gets its own chat (the *Project Main*), separate from the lead's Principal.
 
-1. The lead invites other Homes as **Seats**, each with a responsibility.
-2. It dispatches formal Work with the Project id; Seats work in their own Homes.
+1. The lead may invite shared Homes, such as roles and capabilities, as **Seats**, each with a
+   responsibility. Personal Homes cannot hold Seats; they take part through Work.
+2. It dispatches formal Work with the Project id to any Home; each assignee works in its own Home.
 3. When the linked Work is finished, it **submits** a result claim, with frozen files or a
    delivered Work result as evidence.
 4. A person accepts the claim under **Projects**, or the lead or the person sends it back for
