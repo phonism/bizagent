@@ -14,6 +14,8 @@ export const RUNTIME_WRITER_LOCK_NAME = '.bizagent-writer.lock'
 export const RUNTIME_WRITER_CLAIM_NAME = '.bizagent-writer-claim.lock'
 const CLAIM_WAIT_MS = 2_000
 const CLAIM_POLL_MS = 25
+/** Lock and claim paths this process currently holds, so its own PID is not mistaken for a live owner. */
+const heldInProcess = new Set<string>()
 
 /** Prevent two DSH processes from using independent cached Domain snapshots for the same profile or Home root. */
 export class RuntimeWriterGuard {
@@ -35,7 +37,7 @@ export class RuntimeWriterGuard {
         try {
           const existing = await inspectLock(path)
           if (existing) {
-            if (existing.owner.hostname !== hostname() || processAlive(existing.owner.pid)) {
+            if (ownerMayBeLive(path, existing.owner)) {
               throw new Error(`BizAgent writer is already reserved at ${path} `
                 + `by ${existing.owner.hostname} PID ${existing.owner.pid}`)
             }
@@ -80,7 +82,7 @@ async function acquireClaim(path: string): Promise<HeldLock> {
       await new Promise(resolveDelay => setTimeout(resolveDelay, CLAIM_POLL_MS))
       continue
     }
-    if (claim.owner.hostname !== hostname() || !processAlive(claim.owner.pid)) {
+    if (claim.owner.hostname !== hostname() || !ownerMayBeLive(path, claim.owner)) {
       throw new Error(`BizAgent writer recovery claim is stale at ${path}; `
         + 'verify the prior process before removing it')
     }
@@ -120,6 +122,7 @@ async function createHeld(path: string): Promise<HeldLock> {
       createdAt: new Date().toISOString(), token: randomUUID() }) + '\n')
     await handle.sync()
     const info = await handle.stat()
+    heldInProcess.add(path)
     return { path, handle, device: info.dev, inode: info.ino }
   } catch (error) {
     const info = await handle.stat().catch(() => undefined)
@@ -138,6 +141,17 @@ function validOwner(value: unknown): value is { pid: number; hostname: string } 
   return Number.isSafeInteger(owner['pid']) && Number(owner['pid']) > 0
     && typeof owner['hostname'] === 'string' && owner['hostname'].length > 0
     && typeof owner['token'] === 'string' && owner['token'].length > 0
+}
+
+/**
+ * Whether a lock owner may still be running. Another host cannot be checked, so it counts as live.
+ * The current PID is live only while this process holds the path: after a crash, a restart that
+ * reuses the PID (for example PID 1 in a container) must not be blocked by its predecessor's lock.
+ */
+function ownerMayBeLive(path: string, owner: { pid: number; hostname: string }): boolean {
+  if (owner.hostname !== hostname()) return true
+  if (owner.pid === process.pid) return heldInProcess.has(path)
+  return processAlive(owner.pid)
 }
 
 function processAlive(pid: number): boolean {
@@ -161,6 +175,7 @@ async function releaseLocks(locks: HeldLock[]): Promise<void> {
     } catch (error) {
       errors.push(error)
     } finally {
+      heldInProcess.delete(lock.path)
       await lock.handle.close().catch(error => { errors.push(error) })
     }
   }

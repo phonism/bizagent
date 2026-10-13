@@ -107,3 +107,28 @@ try {
   }))
   await assert.rejects(RuntimeWriterGuard.acquire([root]), /recovery claim is stale/)
 })
+
+test('a lock left by a crashed predecessor with the same PID does not block a restart', async t => {
+  const root = await makeTempDir('bizagent-writer-same-pid-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  // A container restarting after a crash often reuses the PID (for example PID 1).
+  await writeFile(`${root}/.bizagent-writer.lock`, JSON.stringify({ pid: process.pid, hostname: hostname(),
+    createdAt: new Date().toISOString(), token: 'crashed-predecessor' }) + '\n', { mode: 0o600 })
+  const guard = await RuntimeWriterGuard.acquire([root])
+  const owner = JSON.parse(await readFile(`${root}/.bizagent-writer.lock`, 'utf8'))
+  assert.equal(owner.pid, process.pid)
+  assert.notEqual(owner.token, 'crashed-predecessor')
+  // While this process holds the root, a second acquisition in the same process is still refused.
+  await assert.rejects(RuntimeWriterGuard.acquire([root]), /writer is already reserved/)
+  await guard.release()
+  const again = await RuntimeWriterGuard.acquire([root])
+  await again.release()
+})
+
+test('a recovery claim left by a same-PID predecessor is reported as stale, not busy', async t => {
+  const root = await makeTempDir('bizagent-writer-same-pid-claim-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await writeFile(`${root}/.bizagent-writer-claim.lock`, JSON.stringify({ pid: process.pid, hostname: hostname(),
+    createdAt: new Date().toISOString(), token: 'crashed-claim' }) + '\n', { mode: 0o600 })
+  await assert.rejects(RuntimeWriterGuard.acquire([root]), /recovery claim is stale/)
+})
