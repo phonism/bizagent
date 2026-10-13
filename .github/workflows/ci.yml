@@ -34,4 +34,5 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run smoke
+      - run: node examples/learning-lab.mjs
       - run: npm run pack:check

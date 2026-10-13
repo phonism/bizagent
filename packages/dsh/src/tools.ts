@@ -580,7 +580,7 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
     description: 'Create one formal Work responsibility and request notification, then start an independent DSH worker Session when the assignee has a mapped Workspace and both Homes have the same owner. Otherwise the Work stays open for the assignee\'s own Sessions. A launch failure is returned separately; the Work remains durable and can be retried with bizagent_work_start.',
     parameters: {
       to_address: { type: 'string', required: true, description: 'Assignee Agent Home address.' },
-      goal: { type: 'string', required: true, description: 'What the assignee must achieve.' },
+      goal: { type: 'string', required: true, description: 'What the assignee must achieve, in at most 200 characters; put details in acceptance_criteria.' },
       acceptance_criteria: { type: 'string', required: true, description: 'Concrete completion criteria.' },
       idempotency_key: { type: 'string', required: true, description: 'Stable key for this responsibility; retries must reuse it.' },
       project_id: { type: 'string', description: 'Optional existing open Project led by the requester Home.' },

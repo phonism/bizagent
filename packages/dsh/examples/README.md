@@ -48,7 +48,7 @@ node examples/learning-lab.mjs all
   7. Review progress is explicit; later Session changes remain pending after a ledger reopen.
   8. Inbox delivery, reply, and handling survive a ledger reopen without changing Work or Memory.
   9. Formal Work binds one worker Session and one returned result beyond ordinary Inbox replies.
-  10. Project submission records linked Work and an exact owner review across ledger reopen.
+  10. Project submission records linked Work and a human acceptance across ledger reopen.
   11. Session Worklog links formal Work, verifies source events, and tracks a Workspace file.
 ```
 

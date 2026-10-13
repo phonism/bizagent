@@ -221,15 +221,21 @@ async function runScenario(scenario) {
       body: 'The later observation calls for a fresh evidence check before reuse.',
       doneWhenAssessment: 'The formal review was delivered and the conclusion is recorded.',
     })
-    const reviewedProject = await service.reviewProject(author, {
+    // Agents can only request rework; acceptance comes from an authenticated person through the host.
+    await assert.rejects(() => service.reviewProject(author, {
       projectId: project.project.id, claimId: submittedProject.claim.id,
+      decision: 'accept', reason: 'An agent cannot accept its own Project.',
+    }), /host-authenticated human review/)
+    const reviewedProject = await service.reviewProjectAsHuman('demo-reviewer', {
+      projectId: project.project.id, claimId: submittedProject.claim.id,
+      expectedRevision: submittedProject.project.revision,
       decision: 'accept', reason: 'The stated completion standard is met in this fictional scenario.',
-    })
+    }, principal => principal === 'demo-reviewer')
     assert.equal(reviewedProject.project.status, 'accepted')
     const projectReopened = await runtime.reopenProjectLedger()
     assert.equal(projectReopened.get(project.project.id).acceptedClaimId, submittedProject.claim.id)
     await projectReopened.close()
-    process.stdout.write('  10. Project submission records linked Work and an exact owner review across ledger reopen.\n')
+    process.stdout.write('  10. Project submission records linked Work and a human acceptance across ledger reopen.\n')
 
     await mkdir(ownerCwd, { recursive: true })
     await writeFile(join(ownerCwd, 'review.txt'), 'The later observation needs a fresh evidence check before reuse.\n')

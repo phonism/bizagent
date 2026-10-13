@@ -2241,7 +2241,7 @@ export class BizAgentService {
     const acceptanceCriteria = input.acceptanceCriteria.trim()
     const idempotencyKey = input.idempotencyKey.trim()
     const projectId = input.projectId?.trim()
-    if (!goal || goal.length > 180) throw new Error('Work goal must contain 1 to 180 characters')
+    if (!goal || goal.length > 200) throw new Error('Work goal must contain 1 to 200 characters')
     if (!acceptanceCriteria || acceptanceCriteria.length > 4000) {
       throw new Error('Work acceptance criteria must contain 1 to 4000 characters')
     }
@@ -2813,7 +2813,8 @@ export class BizAgentService {
     const sharedKnowledge = input.kind !== undefined && input.kind !== 'knowledge' ? []
       : (await this.searchSharedKnowledgeLayers(this.sharedKnowledgeTargets(binding.homeAddress), input.query))
         .filter(document => this.verifiedSharedKnowledgeDocument(document))
-        .slice(0, Math.max(0, boundedLimit(input.limit, 20, 100) - assets.length))
+        // Clamp like the asset search does; a large limit is a request for "as many as allowed".
+        .slice(0, Math.max(0, Math.min(Math.max(input.limit ?? 20, 1), 100) - assets.length))
         .map(({ body: _body, ...document }) => document)
     return { homeAddress: binding.homeAddress, count: assets.length + sharedKnowledge.length,
       assets, sharedKnowledge }
