@@ -1,12 +1,40 @@
 const MINUTE = 60_000
-const CST_OFFSET = 8 * 60 * MINUTE
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
 const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 
 interface CronField { values: Set<number>; wildcard: boolean }
+interface WallClock { year: number; month: number; day: number; weekday: number; hour: number; minute: number }
 
-/** Next five-field cron occurrence in Asia/Shanghai, strictly after `after`. */
-export function nextCronAt(cron: string, after: number): number {
+const formatters = new Map<string, Intl.DateTimeFormat>()
+
+/** The host's IANA time zone, or UTC when the runtime cannot report one. */
+export function hostTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
+/** Validate an IANA time zone name and return its canonical spelling. */
+export function resolveTimeZone(timeZone: string): string {
+  const name = timeZone.trim()
+  if (!name) throw new TypeError('timeZone must name an IANA time zone')
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: name }).resolvedOptions().timeZone
+  } catch {
+    throw new TypeError(`unknown timeZone: ${timeZone}`)
+  }
+}
+
+/** Calendar day (YYYY-MM-DD) of an instant in the given time zone. */
+export function zonedDay(time: number, timeZone = 'UTC'): string {
+  const clock = wallClock(time, timeZone)
+  return `${clock.year}-${String(clock.month).padStart(2, '0')}-${String(clock.day).padStart(2, '0')}`
+}
+
+/** Next five-field cron occurrence in `timeZone`, strictly after `after`. */
+export function nextCronAt(cron: string, after: number, timeZone = 'UTC'): number {
   if (!Number.isSafeInteger(after) || after < 0) throw new Error('invalid cron clock')
   const fields = cron.trim().split(/\s+/)
   if (fields.length !== 5) throw new Error('cron requires five fields')
@@ -15,18 +43,43 @@ export function nextCronAt(cron: string, after: number): number {
     parseField(fields[2]!, 1, 31), parseField(fields[3]!, 1, 12, MONTHS),
     parseField(fields[4]!, 0, 7, DAYS),
   ]
-  for (let candidate = Math.floor(after / MINUTE) * MINUTE + MINUTE;
-    candidate < after + 8 * 366 * 24 * 60 * MINUTE; candidate += MINUTE) {
-    const cst = new Date(candidate + CST_OFFSET)
-    const dow = cst.getUTCDay()
+  const limit = after + 8 * 366 * 24 * 60 * MINUTE
+  let candidate = Math.floor(after / MINUTE) * MINUTE + MINUTE
+  while (candidate < limit) {
+    const local = wallClock(candidate, timeZone)
     const dateMatch = day.wildcard && weekday.wildcard ? true
-      : day.wildcard ? weekday.values.has(dow)
-        : weekday.wildcard ? day.values.has(cst.getUTCDate())
-          : day.values.has(cst.getUTCDate()) || weekday.values.has(dow)
-    if (minute.values.has(cst.getUTCMinutes()) && hour.values.has(cst.getUTCHours())
-      && month.values.has(cst.getUTCMonth() + 1) && dateMatch) return candidate
+      : day.wildcard ? weekday.values.has(local.weekday)
+        : weekday.wildcard ? day.values.has(local.day)
+          : day.values.has(local.day) || weekday.values.has(local.weekday)
+    // Skip to the next local hour when the date or hour cannot match. Offset changes happen on
+    // hour or half-hour boundaries, so this never steps over a valid minute.
+    if (!month.values.has(local.month) || !dateMatch || !hour.values.has(local.hour)) {
+      candidate += (60 - local.minute) * MINUTE
+      continue
+    }
+    if (minute.values.has(local.minute)) return candidate
+    candidate += MINUTE
   }
   throw new Error('cron has no occurrence within eight years')
+}
+
+function wallClock(time: number, timeZone: string): WallClock {
+  if (timeZone === 'UTC') {
+    const date = new Date(time)
+    return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate(),
+      weekday: date.getUTCDay(), hour: date.getUTCHours(), minute: date.getUTCMinutes() }
+  }
+  let formatter = formatters.get(timeZone)
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric',
+      month: 'numeric', day: 'numeric', weekday: 'short', hour: 'numeric', minute: 'numeric' })
+    formatters.set(timeZone, formatter)
+  }
+  const parts: Record<string, string> = {}
+  for (const part of formatter.formatToParts(time)) parts[part.type] = part.value
+  return { year: Number(parts['year']), month: Number(parts['month']), day: Number(parts['day']),
+    weekday: DAYS.indexOf(String(parts['weekday']).toUpperCase()),
+    hour: Number(parts['hour']), minute: Number(parts['minute']) }
 }
 
 function parseField(text: string, min: number, max: number, names?: readonly string[]): CronField {

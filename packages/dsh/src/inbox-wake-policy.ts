@@ -12,7 +12,7 @@ export const DEFAULT_INBOX_WAKE_POLICY: InboxWakePolicy = { policy: 'batch', bat
 
 /** Freeze the effective recipient schedule at delivery time. */
 export function inboxWakeSchedule(policy: InboxWakePolicy, priority: 'normal' | 'urgent',
-  sentAt: string): { wakePolicy: InboxWakePolicy['policy']; wakeAt?: string } {
+  sentAt: string, timeZone = 'UTC'): { wakePolicy: InboxWakePolicy['policy']; wakeAt?: string } {
   const at = Date.parse(sentAt)
   if (!Number.isSafeInteger(at)) throw new Error('invalid Inbox delivery time')
   if (priority === 'urgent' || policy.policy === 'immediate') {
@@ -21,7 +21,7 @@ export function inboxWakeSchedule(policy: InboxWakePolicy, priority: 'normal' | 
   if (policy.policy === 'carried') return { wakePolicy: 'carried' }
   if (policy.policy === 'scheduled' && policy.cron) {
     try {
-      return { wakePolicy: 'scheduled', wakeAt: new Date(nextCronAt(policy.cron, at)).toISOString() }
+      return { wakePolicy: 'scheduled', wakeAt: new Date(nextCronAt(policy.cron, at, timeZone)).toISOString() }
     } catch { /* An invalid cron falls back to batch delivery. */ }
   }
   const minutes = policy.batchMinutes ?? 15

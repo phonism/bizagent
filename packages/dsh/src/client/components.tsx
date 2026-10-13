@@ -1000,7 +1000,7 @@ function LearningSchedulePanel({ api, home, t }: {
         <label><span>{t('learningSchedule.enabled')}</span>
           <input type="checkbox" checked={enabled} disabled={busy}
             onChange={event => { setEnabled(event.target.checked) }} /></label>
-        <label><span>{t('learningSchedule.cron')}</span>
+        <label><span>{t('learningSchedule.cron')} ({status.timeZone})</span>
           <input className="ba-input" value={cron} disabled={busy} maxLength={100}
             onChange={event => { setCron(event.target.value) }} /></label>
         <label><span>{t('learningSchedule.dailyRuns')}</span>

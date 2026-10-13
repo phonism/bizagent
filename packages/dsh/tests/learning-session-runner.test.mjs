@@ -13,7 +13,7 @@ import { makeTempDir } from './temp-dir.mjs'
 function config(root, workspace) {
   return { homeRoot: root, defaultHome: 'personal:alice', autoCreateDefaultHome: false,
     workspaceHomes: [{ root: workspace, address: 'personal:alice' }],
-    budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 } }
+    budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 }, timeZone: 'Asia/Shanghai' }
 }
 
 function factory(runtime, { createFailure } = {}) {

@@ -1,17 +1,17 @@
 import type { ResolvedConfig, ResolvedLearningSchedule } from './config.js'
 import { nowIso, parseHomeAddress, stableId, type HomeAddress,
   type LearningLaunch, type LearningScheduleCursor, type LearningSchedulePolicy } from './domain.js'
-import { nextCronAt } from './cron.js'
+import { nextCronAt, zonedDay } from './cron.js'
 import type { LearningSessionRunner } from './learning-session-runner.js'
 import type { BizAgentService } from './service.js'
 
 const DAY_MS = 24 * 60 * 60_000
-const SHANGHAI_OFFSET_MS = 8 * 60 * 60_000
 
 export interface LearningScheduleStatus {
   homeAddress: HomeAddress
   hostEnabled: boolean
   configured: boolean
+  timeZone: string
   maxDailyRuns?: number
   schedule?: ResolvedLearningSchedule
   policy?: LearningSchedulePolicy
@@ -42,12 +42,12 @@ export class LearningScheduler {
     const cursor = recordedCursor?.scheduleFingerprint === fingerprint ? recordedCursor : undefined
     const active = this.config.learningSchedulerEnabled && schedule !== undefined && policy?.enabled !== false
     return { homeAddress, hostEnabled: this.config.learningSchedulerEnabled,
-      configured: base !== undefined,
+      configured: base !== undefined, timeZone: this.config.timeZone,
       ...(base ? { maxDailyRuns: base.dailyRuns } : {}),
       ...(schedule ? { schedule } : {}),
       ...(policy ? { policy } : {}),
       ...(cursor ? { cursor } : {}),
-      ...(active ? { nextDueAt: cursor?.nextDueAt ?? nextCronAt(schedule.cron, this.clock()) } : {}),
+      ...(active ? { nextDueAt: cursor?.nextDueAt ?? nextCronAt(schedule.cron, this.clock(), this.config.timeZone) } : {}),
       runsToday: this.runsToday(homeAddress, this.clock()),
       recentLaunches: this.service.ledger.listLearningLaunches(homeAddress).slice(0, 10),
     }
@@ -65,7 +65,7 @@ export class LearningScheduler {
     }
     const cron = input.cron.trim()
     if (cron.length > 100) throw new Error('learning schedule cron is too long')
-    nextCronAt(cron, this.clock())
+    nextCronAt(cron, this.clock(), this.config.timeZone)
     if (!Number.isSafeInteger(input.dailyRuns) || input.dailyRuns < 1 || input.dailyRuns > base.dailyRuns) {
       throw new Error(`learning schedule dailyRuns must be between 1 and ${base.dailyRuns}`)
     }
@@ -108,7 +108,7 @@ export class LearningScheduler {
       if (cursor?.scheduleFingerprint !== fingerprint) {
         cursor = await this.service.ledger.putLearningScheduleCursor({
           schemaVersion: 1, homeAddress: schedule.home, scheduleFingerprint: fingerprint,
-          nextDueAt: nextCronAt(schedule.cron, now), updatedAt: nowIso(),
+          nextDueAt: nextCronAt(schedule.cron, now, this.config.timeZone), updatedAt: nowIso(),
         })
       }
       if (cursor.nextDueAt > now || launched >= 2) { results.push(cursor); continue }
@@ -159,7 +159,7 @@ export class LearningScheduler {
       }
       cursor = await this.service.ledger.putLearningScheduleCursor({
         schemaVersion: 1, homeAddress: schedule.home, scheduleFingerprint: fingerprint,
-        nextDueAt: nextCronAt(schedule.cron, Math.max(now, dueAt)),
+        nextDueAt: nextCronAt(schedule.cron, Math.max(now, dueAt), this.config.timeZone),
         lastDueAt: dueAt, lastOutcome: outcome,
         ...(launchId ? { lastLaunchId: launchId } : {}),
         ...(reason ? { lastReason: reason.slice(0, 2000) } : {}),
@@ -171,9 +171,10 @@ export class LearningScheduler {
   }
 
   private runsToday(home: ResolvedLearningSchedule['home'], now: number): number {
-    const day = shanghaiDay(now)
+    const day = zonedDay(now, this.config.timeZone)
     return this.service.ledger.listLearningLaunches(home)
-      .filter(item => item.trigger === 'schedule' && shanghaiDay(Date.parse(item.createdAt)) === day).length
+      .filter(item => item.trigger === 'schedule'
+        && zonedDay(Date.parse(item.createdAt), this.config.timeZone) === day).length
   }
 }
 
@@ -181,10 +182,6 @@ function effectiveSchedule(base: ResolvedLearningSchedule,
   policy: LearningSchedulePolicy | undefined): ResolvedLearningSchedule {
   return policy === undefined ? base
     : { ...base, cron: policy.cron, dailyRuns: policy.dailyRuns }
-}
-
-function shanghaiDay(time: number): string {
-  return new Date(time + SHANGHAI_OFFSET_MS).toISOString().slice(0, 10)
 }
 
 function scheduledLaunchId(home: string, fingerprint: string, dueAt: number): string {

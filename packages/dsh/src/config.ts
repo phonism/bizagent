@@ -2,7 +2,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import Schema from '@deepseek-ai/schemastery'
 import { type ContextBudget, type HomeAddress, parseHomeAddress } from './domain.js'
-import { nextCronAt } from './cron.js'
+import { hostTimeZone, nextCronAt, resolveTimeZone } from './cron.js'
 
 export interface LearningScheduleConfig {
   home: string
@@ -33,6 +33,7 @@ export interface Config {
   learningCheckpointEnabled?: boolean
   learningSchedulerEnabled?: boolean
   learningSchedules?: LearningScheduleConfig[]
+  timeZone?: string
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -51,6 +52,8 @@ export const Config: Schema<Config> = Schema.object({
     provider: Schema.string(), maxTokens: Schema.number().step(1).min(1),
     dailyRuns: Schema.number().step(1).min(1).max(4).default(1),
   })).default([]),
+  timeZone: Schema.string().description(
+    'IANA time zone for cron schedules and daily run limits. Defaults to the host time zone.'),
 })
 
 export interface ResolvedConfig {
@@ -63,6 +66,7 @@ export interface ResolvedConfig {
   learningCheckpointEnabled: boolean
   learningSchedulerEnabled: boolean
   learningSchedules: ReadonlyArray<ResolvedLearningSchedule>
+  timeZone: string
 }
 
 export function resolveConfig(input: Config = {}): ResolvedConfig {
@@ -86,6 +90,7 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
   if (!Number.isSafeInteger(indexMaxBytes) || indexMaxBytes < 512) {
     throw new TypeError('indexMaxBytes must be an integer >= 512')
   }
+  const timeZone = input.timeZone?.trim() ? resolveTimeZone(input.timeZone) : hostTimeZone()
   const learningSchedules = (input.learningSchedules ?? []).map(item => {
     const home = parseHomeAddress(item.home)
     const cron = item.cron.trim()
@@ -124,6 +129,7 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     learningCheckpointEnabled: input.learningCheckpointEnabled ?? true,
     learningSchedulerEnabled: input.learningSchedulerEnabled ?? false,
     learningSchedules,
+    timeZone,
   }
 }
 

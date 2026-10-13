@@ -1403,7 +1403,7 @@ export class BizAgentService {
         const home = this.inboxAddressHome(recipient, replyTarget?.fromAddress === recipient)
         const exists = isUserAddress(recipient) || (home !== undefined && this.store.hasHome(home))
         const schedule = kind === 'ordinary' && home !== undefined && exists && to.includes(recipient)
-          ? inboxWakeSchedule(await this.store.readInboxWakePolicy(home), priority, sentAt)
+          ? inboxWakeSchedule(await this.store.readInboxWakePolicy(home), priority, sentAt, this.config.timeZone)
           : undefined
         return {
           schemaVersion: 1, messageId: id, recipient,
@@ -1721,7 +1721,7 @@ export class BizAgentService {
       const home = this.inboxAddressHome(target, true)
       const exists = home !== undefined && this.store.hasHome(home)
       const schedule = exists
-        ? inboxWakeSchedule(await this.store.readInboxWakePolicy(home!), 'urgent', sentAt)
+        ? inboxWakeSchedule(await this.store.readInboxWakePolicy(home!), 'urgent', sentAt, this.config.timeZone)
         : undefined
       const delivery: InboxDelivery = {
         schemaVersion: 1, messageId: id, recipient: target,
