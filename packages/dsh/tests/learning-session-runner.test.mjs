@@ -521,3 +521,33 @@ test('local learning policy pauses future periods, enforces host limits, and sur
   assert.equal((await reopened.runDue())[0].lastOutcome, 'empty')
   await runner.close()
 })
+
+test('a launch that needed review for over a day is abandoned so learning can resume', async t => {
+  const root = await makeTempDir('bizagent-learning-launch-stale-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const workspace = `${root}/workspace`
+  await mkdir(workspace)
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'personal:alice' })
+  const runtime = await createDemoRuntime()
+  const requester = runtime.agent('requester', workspace, 'Launch a learning review.')
+  const service = new BizAgentService(store, runtime.ledger, config(root, workspace), runtime.sessionQuery)
+  const broken = factory(runtime, { createFailure: 'before' })
+  const runner = new LearningSessionRunner(broken.agents, runtime.sessionQuery, service, config(root, workspace))
+  await assert.rejects(() => runner.request(requester, 'stuck'), /uncertain start/)
+  const stuck = runtime.ledger.listLearningLaunches('personal:alice')[0]
+  assert.equal(stuck.status, 'needs_review')
+  const day = 24 * 60 * 60_000
+  // Within a day the launch is left for a person to inspect.
+  assert.deepEqual(await runner.retireStaleReviews('personal:alice', Date.parse(stuck.updatedAt) + day / 2, day), [])
+  assert.deepEqual(await runner.retireStaleReviews('personal:alice', Date.parse(stuck.updatedAt) + day + 1, day), [stuck.id])
+  const abandoned = runtime.ledger.getLearningLaunch(stuck.id)
+  assert.equal(abandoned.status, 'abandoned')
+  assert.match(abandoned.reason, /automatically abandoned/)
+  await runner.close()
+  const healthy = factory(runtime)
+  const next = new LearningSessionRunner(healthy.agents, runtime.sessionQuery, service, config(root, workspace))
+  assert.equal((await next.request(requester, 'after-stale')).launch.status, 'active')
+  await next.close()
+})

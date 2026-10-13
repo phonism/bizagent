@@ -116,6 +116,11 @@ export class LearningScheduler {
       let outcome: LearningScheduleCursor['lastOutcome']
       let launchId: string | undefined
       let reason: string | undefined
+      // A launch that has needed review for over a day must not defer every later period.
+      for (const id of await this.runner.retireStaleReviews(schedule.home, now, DAY_MS)) {
+        this.service.recordRuntimeError(`learning launch ${id}`,
+          new Error('needed review for over 24 hours and was abandoned automatically'), schedule.home)
+      }
       const existing = this.service.ledger.getLearningLaunch(scheduledLaunchId(schedule.home, fingerprint, dueAt))
       if (existing) {
         outcome = 'launched'

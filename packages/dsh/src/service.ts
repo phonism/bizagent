@@ -798,11 +798,19 @@ export class BizAgentService {
     }
   }
 
-  private async captureLearningLibrary(homeAddress: HomeAddress): Promise<LearningLibraryFile[]> {
+  /**
+   * Snapshot the Home's identity and learning files. Retired assets are left out, except ones that
+   * were in the batch's starting snapshot, so a retirement during the batch shows as an update.
+   */
+  private async captureLearningLibrary(homeAddress: HomeAddress,
+    startedWith: readonly LearningLibraryFile[] = []): Promise<LearningLibraryFile[]> {
     const root = resolve(this.store.root)
     const home = this.store.getHome(homeAddress)
+    const keep = new Set(startedWith.map(file => join(root, file.path)))
     const paths = () => [join(this.store.homesRoot, home.id, 'identity.md'),
-      ...this.store.listAssets(homeAddress).map(asset => asset.bodyPath)].sort()
+      ...this.store.listAssets(homeAddress)
+        .filter(asset => asset.status !== 'retired' || keep.has(asset.bodyPath))
+        .map(asset => asset.bodyPath)].sort()
     const selected = paths()
     if (selected.length > 1000) throw new Error('learning library snapshot exceeds 1000 managed files')
     const retained: LearningLibraryFile[] = []
@@ -914,11 +922,17 @@ export class BizAgentService {
         return { homeAddress: binding.homeAddress, materials: [], started: false }
       }
       const now = nowIso()
-      const libraryBefore = await this.captureLearningLibrary(binding.homeAddress)
+      let libraryBefore: LearningLibraryFile[] | undefined
+      try {
+        libraryBefore = await this.captureLearningLibrary(binding.homeAddress)
+      } catch (error) {
+        // The file-change audit is optional; a Home too large to snapshot can still learn.
+        this.recordRuntimeError(`learning library snapshot for ${binding.homeAddress}`, error, binding.homeAddress)
+      }
       const run = await this.ledger.putLearningBatch({
         schemaVersion: 1, id, homeAddress: binding.homeAddress,
         reviewerSessionId: String(agent.id), materialIds: materials.map(item => item.id),
-        status: 'open', libraryBefore, createdAt: now, updatedAt: now,
+        status: 'open', ...(libraryBefore !== undefined ? { libraryBefore } : {}), createdAt: now, updatedAt: now,
       })
       return { ...this.learningBatchView(run), started: true }
     })
@@ -1001,12 +1015,16 @@ export class BizAgentService {
         }
       } else {
         if (!this.sessionQuery) throw new Error('DSH sessionQuery is unavailable')
-        snapshot = await this.sessionQuery.readSession(observation.sessionId as SessionId)
-        if (String(snapshot.session.id) !== observation.sessionId
-          || snapshot.events.length !== observation.eventCount
-          || fingerprintEvents(snapshot.events) !== observation.fingerprint) {
+        const current = await this.sessionQuery.readSession(observation.sessionId as SessionId)
+        // Sessions are append-only: later events do not change the frozen material, so review the
+        // exact prefix the batch froze and reject only a prefix that no longer matches.
+        const frozen = current.events.slice(0, observation.eventCount)
+        if (String(current.session.id) !== observation.sessionId
+          || frozen.length !== observation.eventCount
+          || fingerprintEvents(frozen) !== observation.fingerprint) {
           throw new Error('learning material changed since the batch was frozen; abandon and rescan')
         }
+        snapshot = { ...current, events: frozen }
       }
       const prepared = candidates.map((candidate, index) => {
         if (!['memory', 'insight', 'knowledge', 'method'].includes(candidate.kind)) throw new Error('invalid learning candidate kind')
@@ -1091,7 +1109,7 @@ export class BizAgentService {
       if (run.libraryBefore !== undefined) {
         try {
           libraryChanges = learningLibraryChanges(run.libraryBefore,
-            await this.captureLearningLibrary(binding.homeAddress))
+            await this.captureLearningLibrary(binding.homeAddress, run.libraryBefore))
         } catch (error) {
           libraryChangeError = errorMessage(error).slice(0, 500)
         }

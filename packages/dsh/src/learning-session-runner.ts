@@ -5,7 +5,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import type { ResolvedConfig } from './config.js'
 import type { ResolvedLearningSchedule } from './config.js'
-import { nowIso, stableId, type LearningLaunch } from './domain.js'
+import { nowIso, stableId, type HomeAddress, type LearningLaunch } from './domain.js'
 import { summarizeLearningUsage } from './learning-usage.js'
 import type { BizAgentService } from './service.js'
 
@@ -169,6 +169,28 @@ export class LearningSessionRunner {
       const updated = await this.service.ledger.putLearningLaunch({ ...launch,
         status: 'abandoned', reason: explanation, updatedAt: nowIso() })
       return this.view(updated)
+    })
+  }
+
+  /**
+   * Abandon launches that have needed review for longer than `maxAgeMs`, so one unresolved launch
+   * cannot block every later scheduled learning period. A live worker or an open batch keeps it.
+   */
+  async retireStaleReviews(homeAddress: HomeAddress, now: number, maxAgeMs: number): Promise<string[]> {
+    return this.service.ledger.withLearningBatchWrite(async () => {
+      const retired: string[] = []
+      const openWorkers = new Set(this.service.ledger.listLearningBatches(homeAddress)
+        .filter(run => run.status === 'open').map(run => run.reviewerSessionId))
+      for (const launch of this.service.ledger.listLearningLaunches(homeAddress)) {
+        if (launch.status !== 'needs_review' || Date.parse(launch.updatedAt) > now - maxAgeMs) continue
+        if (this.agents.get(launch.workerSessionId as SessionId) || openWorkers.has(launch.workerSessionId)) continue
+        await this.service.ledger.putLearningLaunch({ ...launch, status: 'abandoned',
+          reason: `automatically abandoned after needing review since ${launch.updatedAt}`
+            + (launch.reason ? `: ${launch.reason}` : ''),
+          updatedAt: new Date(now).toISOString() })
+        retired.push(launch.id)
+      }
+      return retired
     })
   }
 

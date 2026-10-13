@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { rm } from 'node:fs/promises'
+import { rm, symlink, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import { HomeStore } from '../lib/home-store.js'
 import { BizAgentService } from '../lib/service.js'
@@ -220,4 +221,64 @@ test('learning batch completion reports an unavailable file snapshot without tra
   assert.equal(finished.run.status, 'completed')
   assert.match(finished.run.libraryChangeError, /under 8 MiB/)
   assert.equal(finished.run.libraryChanges, undefined)
+})
+
+test('a source Session that only grew after freezing still settles against its frozen prefix', async t => {
+  const root = await makeTempDir('bizagent-learning-batch-grew-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'personal:alice' })
+  const runtime = await createDemoRuntime()
+  const source = runtime.agent('source', root, 'Original fact.')
+  await runtime.ledger.putBinding({ sessionId: 'source', homeAddress: 'personal:alice', boundAt: '2026-01-01T00:00:00Z' })
+  const reviewer = runtime.agent('reviewer', root, 'Review sources.')
+  const service = new BizAgentService(store, runtime.ledger, config(root), runtime.sessionQuery)
+  const started = await service.startLearningBatch(reviewer, 'first')
+  const frozenCount = started.materials[0].eventCount
+  // The user keeps talking in the source Session after the batch froze it.
+  const events = source.session.events
+  events.push({ seq: events.length, time: Date.now(), type: 'user/message',
+    data: { content: [{ type: 'text', text: 'A later message.' }] } })
+  await assert.rejects(() => service.settleLearningBatchMaterial(reviewer, {
+    runId: started.run.id, materialId: started.materials[0].id, summary: 'Cite the later message.',
+    candidates: [{ kind: 'memory', description: 'Later', body: 'Later message.', fromSeq: frozenCount, toSeq: frozenCount }],
+  }), /source event range is incomplete/)
+  const settled = await service.settleLearningBatchMaterial(reviewer, {
+    runId: started.run.id, materialId: started.materials[0].id, summary: 'Keep the original fact.',
+    candidates: [{ kind: 'memory', description: 'Original fact', body: 'Original fact.', fromSeq: 1, toSeq: 1 }],
+  })
+  assert.equal(settled.review.assetIds.length, 1)
+  const finished = await service.finishLearningBatch(reviewer, { runId: started.run.id, action: 'complete', summary: 'Done.' })
+  assert.equal(finished.run.status, 'completed')
+})
+
+test('a Home whose learning files cannot be snapshotted can still start and finish a batch', async t => {
+  const root = await makeTempDir('bizagent-learning-batch-snapshot-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'personal:alice' })
+  const runtime = await createDemoRuntime()
+  runtime.agent('source', root, 'Original fact.')
+  await runtime.ledger.putBinding({ sessionId: 'source', homeAddress: 'personal:alice', boundAt: '2026-01-01T00:00:00Z' })
+  const retired = await store.createAsset({ id: 'retired-rule', ownerAddress: 'personal:alice', kind: 'memory',
+    description: 'Old rule', body: 'No longer used.', status: 'retired',
+    sourceRefs: [{ type: 'session-events', sessionId: 'source', fromSeq: 1, toSeq: 1 }] })
+  const reviewer = runtime.agent('reviewer', root, 'Review sources.')
+  const service = new BizAgentService(store, runtime.ledger, config(root), runtime.sessionQuery)
+  const first = await service.startLearningBatch(reviewer, 'first')
+  // Retired assets are not part of the learning library snapshot.
+  assert.ok(first.run.libraryBefore.every(file => !file.path.endsWith(`${retired.id}.md`)))
+  await service.finishLearningBatch(reviewer, { runId: first.run.id, action: 'abandon', summary: 'Restart.' })
+
+  // Make the snapshot impossible: identity.md now escapes the Home root through a symlink.
+  const identity = join(root, 'homes', store.getHome('personal:alice').id, 'identity.md')
+  await writeFile(join(root, 'outside-identity.md'), 'Outside.\n')
+  await rm(identity)
+  await symlink(join(root, 'outside-identity.md'), identity)
+  const second = await service.startLearningBatch(reviewer, 'second')
+  assert.equal(second.started, true)
+  assert.equal(second.run.libraryBefore, undefined)
+  assert.ok(service.listRuntimeIssues().some(issue => issue.message.startsWith('learning library snapshot for personal:alice')))
 })
