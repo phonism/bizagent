@@ -905,11 +905,11 @@ function HomeWorkspace({ api, detail, sessionId, selectedAsset, onSelectAsset, o
         </blockquote>
       </section>
 
-      <LearningSchedulePanel key={summary.address} api={api} home={summary.address} t={t} />
+      <LearningSchedulePanel key={`schedule:${summary.address}`} api={api} home={summary.address} t={t} />
 
       <MemoryStrata detail={detail} t={t} />
 
-      <WorklogPanel key={summary.address} detail={detail} t={t} />
+      <WorklogPanel key={`worklog:${summary.address}`} detail={detail} t={t} />
 
       <section className="ba-ledger">
         <div className="ba-ledger-head">
@@ -995,6 +995,8 @@ function LearningSchedulePanel({ api, home, t }: {
   }
   const available = status?.hostEnabled && status.configured
   const latest = status?.recentLaunches[0]
+  // Scheduling is a host setting; without it there is nothing for the person to do here.
+  if (!available && error === undefined) return null
   return <section className="ba-ledger ba-learning-schedule">
     <div className="ba-ledger-head"><div className="ba-ledger-title"><h3>{t('learningSchedule.title')}</h3></div>
       <button type="button" disabled={busy} onClick={() => { void refresh().catch(cause => setError(errorMessage(cause))) }}>
@@ -1275,8 +1277,7 @@ function SharedKnowledgeReviewPanel({ api, t }: { api: BizAgentUiPort; t: Dashbo
     })
     return () => controller.abort()
   }, [api])
-  if (!reviews) return null
-  const pending = reviews.proposals.filter(item => item.proposal.status === 'pending')
+  const pending = reviews?.proposals.filter(item => item.proposal.status === 'pending') ?? []
   const item = pending.find(entry => entry.proposal.id === selected)
   const decide = async (action: 'accept' | 'reject'): Promise<void> => {
     if (!item || !decision.trim() || busy || !api.decideSharedKnowledge) return
@@ -1290,6 +1291,9 @@ function SharedKnowledgeReviewPanel({ api, t }: { api: BizAgentUiPort; t: Dashbo
     } catch (cause) { setError(errorMessage(cause)) }
     finally { setBusy(false) }
   }
+  // Shared product-line and platform Knowledge is a team feature; stay out of the way until
+  // something actually waits for this person's review.
+  if (pending.length === 0 && error === undefined) return null
   return <section className="ba-shared-knowledge-reviews">
     <div className="ba-pane-head"><h3 className="ba-pane-title">{t('sharedKnowledge.title')}</h3>
       <button type="button" disabled={busy} onClick={() => {
