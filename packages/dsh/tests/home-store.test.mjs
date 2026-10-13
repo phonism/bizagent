@@ -323,3 +323,26 @@ test('a broken organization.yaml leaves the Homes usable and is never overwritte
   /organization\.yaml exists but could not be loaded/)
   assert.equal(await readFile(join(root, 'organization.yaml'), 'utf8'), 'id: [unterminated\n')
 })
+
+test('files written by a newer BizAgent are refused, reported, and never overwritten', async t => {
+  const root = await makeTempDir('bizagent-future-format-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new HomeStore(root)
+  await store.initialize()
+  const home = await store.createHome({ address: 'role:analytics', owner: 'qi', identity: 'Original identity.' })
+  const homeFile = join(root, 'homes', home.id, 'home.yaml')
+  await writeFile(homeFile, (await readFile(homeFile, 'utf8')).replace('schemaVersion: 1', 'schemaVersion: 2'))
+  const reopened = new HomeStore(root)
+  await reopened.initialize()
+  assert.equal(reopened.hasHome('role:analytics'), false)
+  assert.match((await reopened.doctor()).issues.join('\n'), /home\.yaml uses format 2, written by a newer BizAgent/)
+  await assert.rejects(() => reopened.createHome({ address: 'role:analytics', identity: 'Replacement.' }),
+    /already exists but could not be loaded/)
+  assert.equal(await readFile(join(root, 'homes', home.id, 'identity.md'), 'utf8'), 'Original identity.\n')
+
+  const directoryFile = join(root, 'directory.yaml')
+  const directory = await readFile(directoryFile, 'utf8')
+  await writeFile(directoryFile, directory.replace('schemaVersion: 1', 'schemaVersion: 3'))
+  await assert.rejects(() => new HomeStore(root).initialize(), /directory\.yaml uses format 3/)
+  assert.equal(await readFile(directoryFile, 'utf8'), directory.replace('schemaVersion: 1', 'schemaVersion: 3'))
+})

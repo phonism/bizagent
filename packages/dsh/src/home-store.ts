@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
+import { lstat, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import YAML from 'yaml'
 import { z } from 'zod'
@@ -571,7 +571,10 @@ export class HomeStore {
       }
       return owners
     }
-    const parsed = DIRECTORY_SCHEMA.safeParse(YAML.parse(raw))
+    const document: unknown = YAML.parse(raw)
+    // This store rewrites directory.yaml; never downgrade one written by a newer BizAgent.
+    assertKnownFormat(document, 'directory.yaml')
+    const parsed = DIRECTORY_SCHEMA.safeParse(document)
     if (!parsed.success) {
       this.integrityIssues.push('directory.yaml is malformed; Agent Home owners were not verified')
       return owners
@@ -596,6 +599,7 @@ export class HomeStore {
   private async loadHome(directory: string): Promise<HomeCache> {
     this.assertWithinRoot(directory)
     const homeRaw = YAML.parse(await readManagedText(join(directory, 'home.yaml')))
+    assertKnownFormat(homeRaw, 'home.yaml')
     let home = AgentHomeSchema.parse(homeRaw) as AgentHome
     // home.yaml lives in the Home's writable Workspace: its identity fields must match the address.
     if (home.id !== safeHomeId(home.address)) {
@@ -661,6 +665,7 @@ export class HomeStore {
       if (isNotFound(error)) return
       throw error
     }
+    assertKnownFormat(raw, 'organization.yaml')
     const organization = OrganizationSchema.parse(raw) as Organization
     const referenced = new Set<HomeAddress>([
       ...(organization.lineHome === undefined ? [] : [organization.lineHome]),
@@ -699,6 +704,11 @@ export class HomeStore {
     const id = safeHomeId(address)
     const directory = join(this.homesRoot, id)
     this.assertWithinRoot(directory)
+    if (await lstat(directory).then(() => true, () => false)) {
+      // A folder that did not load (damaged, or written by a newer BizAgent) is never replaced.
+      throw new Error(`a folder for Agent Home ${address} already exists but could not be loaded; `
+        + 'run bizagent doctor for the reason')
+    }
     const temporaryDirectory = `${directory}.${process.pid}.${randomUUID()}.tmp`
     this.assertWithinRoot(temporaryDirectory)
     await mkdir(temporaryDirectory, { recursive: false })
@@ -808,6 +818,14 @@ function normalizeTags(tags: string[]): string[] {
   return [...new Set(tags.map(tag => tag.trim()).filter(Boolean))].sort()
 }
 
+/** Refuse files written by a newer BizAgent with a message that says so, instead of a schema error. */
+function assertKnownFormat(raw: unknown, file: string): void {
+  const version = raw !== null && typeof raw === 'object' ? (raw as { schemaVersion?: unknown }).schemaVersion : undefined
+  if (typeof version === 'number' && version > 1) {
+    throw new Error(`${file} uses format ${version}, written by a newer BizAgent; upgrade BizAgent to read it`)
+  }
+}
+
 function normalizeId(value: string, label: string): string {
   const normalized = value.trim().toLocaleLowerCase()
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(normalized)) {
@@ -848,7 +866,9 @@ function parseAsset(raw: string, bodyPath: string): StoredAsset {
   if (!input.startsWith('---\n')) throw new Error(`${bodyPath}: missing YAML frontmatter`)
   const end = input.indexOf('\n---\n', 4)
   if (end < 0) throw new Error(`${bodyPath}: unterminated YAML frontmatter`)
-  const metadata = AssetMetadataSchema.parse(YAML.parse(input.slice(4, end))) as AssetMetadata
+  const frontmatter: unknown = YAML.parse(input.slice(4, end))
+  assertKnownFormat(frontmatter, bodyPath)
+  const metadata = AssetMetadataSchema.parse(frontmatter) as AssetMetadata
   const body = normalizeBody(input.slice(end + 5))
   return { ...metadata, body, bodyPath }
 }
