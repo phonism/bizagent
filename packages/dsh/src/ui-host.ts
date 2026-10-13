@@ -204,6 +204,11 @@ export class BizAgentUiFacade {
     return this.home(home.address)
   }
 
+  async createSampleOrganization(workspacePath: string): Promise<UiOverview> {
+    await this.service.createSampleOrganization(workspacePath)
+    return this.overview()
+  }
+
   async createOrganization(request: UiCreateOrganizationRequest): Promise<UiOverview> {
     const input = CreateOrganizationSchema.parse(request)
     await this.service.createOrganizationInWorkspace(input)
@@ -357,6 +362,14 @@ export function apply(ctx: Context, _config: Config = {}): void {
       handler: (req, res) => route(req, res, 'POST', async () => {
         const input = CreateOrganizationSchema.parse(await readJson(req))
         return facade.createOrganization(input)
+      }),
+    }),
+    ctx.webServer.register({
+      kind: 'exact',
+      path: `${BIZAGENT_UI_API}/organization/sample`,
+      handler: (req, res) => route(req, res, 'POST', async () => {
+        const input = z.object({ workspacePath: z.string().trim().min(1).max(4096) }).strict().parse(await readJson(req))
+        return facade.createSampleOrganization(input.workspacePath)
       }),
     }),
     ctx.webServer.register({

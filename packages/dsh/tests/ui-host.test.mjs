@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { rm } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Readable } from 'node:stream'
@@ -356,6 +356,7 @@ test('UI host remains a separate optional Cordis adapter', async (t) => {
     '/api/bizagent/v1/learning/schedule/configure',
     '/api/bizagent/v1/learning/use-outcomes',
     '/api/bizagent/v1/organization',
+    '/api/bizagent/v1/organization/sample',
     '/api/bizagent/v1/overview',
     '/api/bizagent/v1/projects',
     '/api/bizagent/v1/projects/detail',
@@ -595,4 +596,25 @@ test('UI routes require DSH browser login when the host provides it', async t =>
     body: { address: 'role:sneaky' } })
   assert.equal(create.status, 401)
   assert.equal(service.store.hasHome('role:sneaky'), false)
+})
+
+test('the sample team is one request away and comes with its data file', async t => {
+  const { service: base, root } = await fixture(t)
+  const service = new BizAgentService(base.store, base.ledger, { ...base.config, owner: 'qi' })
+  const call = routeHarness(service)
+  const headers = { 'content-type': 'application/json', host: '127.0.0.1:4100', origin: 'http://127.0.0.1:4100' }
+  const workspacePath = `${root}/workspace`
+  await mkdir(workspacePath, { recursive: true })
+  const created = await call('/api/bizagent/v1/organization/sample', { method: 'POST', headers, body: { workspacePath } })
+  assert.equal(created.status, 200)
+  assert.equal(created.body.organization.id, 'sample-shop')
+  assert.deepEqual(created.body.homes.map(home => home.address).sort(), ['business:sample-shop', 'capability:metrics',
+    'line:sample-shop', 'personal:data-analyst', 'personal:growth-lead', 'role:analytics', 'role:growth'])
+  assert.deepEqual([...new Set(service.store.listHomes().map(home => home.owner))], ['qi'])
+  const orders = await readFile(join(service.store.homeWorkspacePath('personal:data-analyst'), 'orders.csv'), 'utf8')
+  assert.match(orders, /A4,refunded,60\.00/)
+  // Both Homes belong to the same person, so Work between them starts on its own.
+  assert.equal(service.workAutoStartBlock('personal:growth-lead', 'personal:data-analyst'), undefined)
+  const again = await call('/api/bizagent/v1/organization/sample', { method: 'POST', headers, body: { workspacePath } })
+  assert.equal(again.status, 200)
 })

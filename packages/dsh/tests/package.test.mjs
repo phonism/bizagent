@@ -73,7 +73,6 @@ test('published package declares an installable DSH bundle', async () => {
     },
     workspaces: {
       async create({ path }) { calls.push(['create', path]); return { workspaceId: 'workspace-alice' } },
-      async insertSessionBefore(workspaceId, sessionId) { calls.push(['insert', workspaceId, sessionId]) },
     },
     sessions: { async refresh() { calls.push(['refresh']) } },
     uiWorkspace: { openSession(id) { calls.push(['open', id]) } },
@@ -81,6 +80,5 @@ test('published package declares an installable DSH bundle', async () => {
   const dashboard = entries.find(entry => entry.name === 'shell.overlay')
   assert.ok(dashboard)
   await dashboard.inject().openAgentSession({ homeAddress: 'personal:alice' })
-  assert.deepEqual(calls, [['create', '/tmp/alice'],
-    ['insert', 'workspace-alice', 'session-principal'], ['refresh'], ['open', 'session-principal']])
+  assert.deepEqual(calls, [['create', '/tmp/alice'], ['refresh'], ['open', 'session-principal']])
 })

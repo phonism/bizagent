@@ -31,10 +31,12 @@ import type {
   UiMemoryUseOutcomes,
   UiOverview,
 } from '../ui-contract.js'
+import { BIZAGENT_SAMPLE_ORGANIZATION_ID } from '../ui-contract.js'
 import type { BizAgentUiPort, UiSharedKnowledgeReviews } from './api.js'
 import type { BizAgentUiController } from './controller.js'
 import { ProjectsDashboard } from './projects.js'
 import { HumanInboxDashboard } from './human-inbox.js'
+import { SampleGuide } from './sample-guide.js'
 
 export interface BizAgentUiFace {
   controller: BizAgentUiController
@@ -320,7 +322,11 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
               <span className="ba-current-location">
                 <strong>{currentWorkspace.title}</strong>
                 <span>/</span>
-                <code>{samePath(overview.organizationLocation?.workspacePath, currentWorkspace.path) ? `bizagent/${overview.organization?.id ?? ''}` : t('workspace.noOrganization')}</code>
+                <code>{samePath(overview.organizationLocation?.workspacePath, currentWorkspace.path)
+                  // A Home's own Workspace lies inside the organization directory.
+                  || (overview.organizationLocation !== undefined
+                    && pathContains(overview.organizationLocation.organizationRoot, currentWorkspace.path))
+                  ? `bizagent/${overview.organization?.id ?? ''}` : t('workspace.noOrganization')}</code>
               </span>
             ) : null}
             {overview !== undefined ? (
@@ -398,6 +404,8 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
               void selectHome(address).then(() => { setView('learning') })
             }}
             onOpenLearning={() => { setView('learning') }}
+            onOpenChat={homeAddress => openAgentSession({ homeAddress })}
+            onOpenProjects={() => { setView('projects') }}
             t={t}
           />
         ) : (
@@ -497,6 +505,19 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
     setCapabilities(current => current.map((capability, position) => position === index ? { ...capability, ...patch } : capability))
   }
 
+  const createSample = async (): Promise<void> => {
+    if (api.createSampleOrganization === undefined || organizationWorkspace === '' || busy) return
+    setBusy(true)
+    setError(undefined)
+    try {
+      await onCreated(await api.createSampleOrganization(organizationWorkspace))
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const submit = async (): Promise<void> => {
     if (!validBasics || !validMembers || !validCapabilities || organizationWorkspace === '' || busy) return
     setBusy(true)
@@ -551,6 +572,19 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
       }}>
         {step === 0 ? (
           <div className="ba-setup-stage">
+            {api.createSampleOrganization !== undefined ? (
+              <div className="ba-sample-offer">
+                <div>
+                  <strong>{t('setup.sample.title')}</strong>
+                  <p>{t('setup.sample.body')}</p>
+                </div>
+                <button type="button" className="ba-button" data-variant="primary"
+                  disabled={busy || organizationWorkspace === ''} onClick={() => { void createSample() }}>
+                  {t('setup.sample.action')}
+                </button>
+                {error !== undefined ? <p className="ba-inline-error" role="alert">{t('setup.failed', { message: error })}</p> : null}
+              </div>
+            ) : null}
             <p className="ba-stage-number">01 / 04</p>
             <h3>{t('setup.identity.title')}</h3>
             <p className="ba-stage-lead">{t('setup.identity.lead')}</p>
@@ -668,11 +702,14 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
   )
 }
 
-function OrganizationOverview({ overview, currentWorkspacePath, onOpenHome, onOpenLearning, t }: {
+function OrganizationOverview({ overview, currentWorkspacePath, onOpenHome, onOpenLearning, onOpenChat,
+  onOpenProjects, t }: {
   overview: UiOverview
   currentWorkspacePath: string | undefined
   onOpenHome: (address: string) => void
   onOpenLearning: () => void
+  onOpenChat: (homeAddress: string) => Promise<void>
+  onOpenProjects: () => void
   t: DashboardProps['t']
 }) {
   const organization = overview.organization
@@ -706,6 +743,9 @@ function OrganizationOverview({ overview, currentWorkspacePath, onOpenHome, onOp
         </div>
         <div className="ba-org-art" aria-hidden="true"><BizAgentMark /></div>
       </header>
+
+      {organization.id === BIZAGENT_SAMPLE_ORGANIZATION_ID
+        ? <SampleGuide onOpenChat={onOpenChat} onOpenProjects={onOpenProjects} t={t} /> : null}
 
       <section className="ba-org-map" aria-label={t('organization.map')}>
         {organization.lineHome !== undefined ? <>

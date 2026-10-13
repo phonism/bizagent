@@ -37,12 +37,11 @@ export function apply(ctx: Context): void {
   const face = (): BizAgentUiFace => ({ controller, api,
     openAgentSession: async input => {
       const opened = await api.openAgentSession(input)
-      const workspace = await ctx.workspaces.create({ path: opened.workspacePath })
-      const sessionId = opened.sessionId as SessionId
-      await ctx.workspaces.insertSessionBefore(workspace.workspaceId, sessionId)
-      // The host created this Session; refresh the list so the client knows it before opening.
+      // The host already attached the Session to its Home Workspace; register that Workspace in
+      // this page and refresh the Session list so the client knows the Session before opening it.
+      await ctx.workspaces.create({ path: opened.workspacePath })
       await ctx.sessions.refresh()
-      ctx.uiWorkspace.openSession(sessionId)
+      ctx.uiWorkspace.openSession(opened.sessionId as SessionId)
       controller.close()
     },
   })

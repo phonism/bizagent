@@ -10,6 +10,11 @@ import { dshOperatorAuthentication, guardLocalRoute } from './route-guard.js'
 import { registerSharedKnowledgeReviewRoute } from './shared-knowledge-review-transport.js'
 import { BIZAGENT_AGENT_SESSION_API, BIZAGENT_LOCAL_HUMAN_STATUS_API } from './ui-contract.js'
 
+/** The slice of DSH's host `workspaceRegistry` used to list opened Sessions in the sidebar. */
+interface WorkspaceRegistryLike {
+  create(path: string, title?: string): Promise<{ attachSession(sessionId: string): Promise<void> }>
+}
+
 export const name = 'bizagent-local-human-host'
 export const inject = ['bizagent', 'bizagentAgentSessions', 'webServer']
 
@@ -39,6 +44,18 @@ export async function apply(ctx: Context): Promise<void> {
     }
     const operator = dshOperatorAuthentication(ctx)
     return operator !== undefined && operator.requestRejection(request) === undefined ? { userId } : null
+  }
+  // DSH Web lists only Sessions attached to a Workspace. Sessions this plugin opens are created on
+  // the host, so attach them to a Workspace named after their Home, as DSH does for its own.
+  const showInSidebar = async (homeAddress: string, sessionId: string): Promise<string> => {
+    const path = ctx.bizagent.store.homeWorkspacePath(homeAddress)
+    const registry = (ctx as unknown as { get(name: string): unknown }).get('workspaceRegistry') as
+      WorkspaceRegistryLike | undefined
+    if (registry !== undefined) {
+      const workspace = await registry.create(path, ctx.bizagent.store.getHome(homeAddress).displayName)
+      await workspace.attachSession(sessionId)
+    }
+    return path
   }
   const ownsHome = (address: string): boolean => {
     try { return ctx.bizagent.store.getHome(address).owner === userId }
@@ -94,14 +111,12 @@ export async function apply(ctx: Context): Promise<void> {
           if (principal) {
             if (!ownsHome(input.homeAddress as string)) { reply(403, { error: 'home-forbidden' }); return }
             const result = await ctx.bizagentAgentSessions.openPrincipal(input.homeAddress as string)
-            reply(200, { ...result,
-              workspacePath: ctx.bizagent.store.homeWorkspacePath(result.homeAddress) })
+            reply(200, { ...result, workspacePath: await showInSidebar(result.homeAddress, result.sessionId) })
           } else {
             const project = ctx.bizagent.projectLedger?.get(input.projectId as string)
             if (!project || !ownsHome(project.lead)) { reply(403, { error: 'project-forbidden' }); return }
             const result = await ctx.bizagentAgentSessions.openProjectMain(input.projectId as string)
-            reply(200, { ...result,
-              workspacePath: ctx.bizagent.store.homeWorkspacePath(result.homeAddress) })
+            reply(200, { ...result, workspacePath: await showInSidebar(result.homeAddress, result.sessionId) })
           }
         } catch { reply(409, { error: 'agent-session-unavailable' }) }
       }) }),

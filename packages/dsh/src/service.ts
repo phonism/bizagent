@@ -2,7 +2,8 @@ import type {} from './message-source.js'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { realpathSync } from 'node:fs'
-import { lstat, realpath, stat } from 'node:fs/promises'
+import { lstat, realpath, stat, writeFile } from 'node:fs/promises'
+import { SAMPLE_FILES, SAMPLE_ORGANIZATION } from './sample-organization.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
@@ -228,6 +229,18 @@ export class BizAgentService {
     this.store = nextStore
     this.activeOrganization = location
     await this.refreshSharedKnowledgeIndex()
+  }
+
+  /** Create the one-click sample team in a DSH Workspace and place its sample data files. */
+  async createSampleOrganization(workspacePath: string): Promise<void> {
+    await this.createOrganizationInWorkspace({ ...SAMPLE_ORGANIZATION, workspacePath })
+    for (const file of SAMPLE_FILES) {
+      try {
+        await writeFile(join(this.store.homeWorkspacePath(file.home), file.path), file.content, { flag: 'wx' })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
+    }
   }
 
   bindSession(sessionId: string, cwd?: string): SessionBinding | undefined {

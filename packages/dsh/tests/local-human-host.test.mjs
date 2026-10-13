@@ -55,7 +55,11 @@ test('local DSH human host accepts a private Bearer token and checks the current
     },
   }
   let cleanup
-  await apply({ bizagent: service, get: () => undefined,
+  const attached = []
+  const workspaceRegistry = { async create(path) {
+    return { async attachSession(sessionId) { attached.push([path, sessionId]) } }
+  } }
+  await apply({ bizagent: service, get: name => name === 'workspaceRegistry' ? workspaceRegistry : undefined,
     bizagentAgentSessions: {
       openPrincipal: async homeAddress => ({ kind: 'principal', homeAddress,
         sessionId: 'principal-session-1', logicalAddress: homeAddress }),
@@ -97,6 +101,8 @@ test('local DSH human host accepts a private Bearer token and checks the current
   const principal = await openSession({ homeAddress: 'personal:alice' }, token)
   assert.equal(principal.status, 200)
   assert.equal((await principal.json()).sessionId, 'principal-session-1')
+  // The opened Session is attached to its Home Workspace so DSH Web lists it.
+  assert.deepEqual(attached, [['/tmp/home/personal:alice', 'principal-session-1']])
   assert.equal((await openSession({ projectId: 'bob-project' }, token)).status, 403)
   assert.equal((await openSession({ projectId: 'alice-project' }, token)).status, 200)
   const review = projectId => JSON.stringify({ projectId, claimId: 'claim-1',

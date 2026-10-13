@@ -21,6 +21,8 @@ import type { LearningScheduleStatus } from './learning-scheduler.js'
 import type { HomeDirectoryEntry } from './home-directory.js'
 
 export const BIZAGENT_UI_API = '/api/bizagent/v1'
+/** Organization id of the one-click sample team; the UI shows a getting-started guide for it. */
+export const BIZAGENT_SAMPLE_ORGANIZATION_ID = 'sample-shop'
 export const BIZAGENT_AGENT_DIRECTORY_API = `${BIZAGENT_UI_API}/agents`
 export const BIZAGENT_PROJECT_REVIEW_API = '/api/bizagent/project-review'
 export const BIZAGENT_LOCAL_HUMAN_STATUS_API = '/api/bizagent/local-human/status'
