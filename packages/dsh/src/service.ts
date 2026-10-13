@@ -3526,9 +3526,12 @@ export class BizAgentService {
         || existing.signal !== input.signal || existing.outcome !== (input.outcome?.trim() || undefined)) {
         throw new Error(`fitness receipt conflicts with its prior value: ${existing.id}`)
       }
+      // A replay still settles fitness: a crash after the receipt but before the asset write
+      // would otherwise lose this receipt's effect for good.
+      const settled = await this.settleFitness(binding.homeAddress, asset.id)
       const harmful = this.ledger.listReceipts(asset.id)
         .filter(item => item.signal === 'contradicted' || item.signal === 'failed')
-      return { receipt: existing, asset: publicAsset(asset), reviewRequired: harmful.length >= 2,
+      return { receipt: existing, asset: publicAsset(settled), reviewRequired: harmful.length >= 2,
         idempotentReplay: true }
     }
     const receipt = this.receipt(
@@ -3542,18 +3545,30 @@ export class BizAgentService {
     const created = await this.ledger.putReceipt(receipt)
     const recordedReceipt = created === false
       ? this.ledger.listReceipts(asset.id).find(item => item.id === receipt.id) ?? receipt : receipt
-    const delta = created === false ? 0 : fitnessDelta(input.signal)
-    const updated = delta === 0
-      ? asset
-      : await this.store.updateAsset(binding.homeAddress, asset.id, {
-        fitness: Math.max(-1, Math.min(1, asset.fitness + delta)),
-      })
+    const updated = await this.settleFitness(binding.homeAddress, asset.id)
     const harmfulReceipts = this.ledger.listReceipts(asset.id)
       .filter(item => item.signal === 'contradicted' || item.signal === 'failed')
     return {
       receipt: recordedReceipt,
       asset: publicAsset(updated),
       reviewRequired: harmfulReceipts.length >= 2,
+    }
+  }
+
+  /**
+   * Fitness is derived from the asset's receipts, so concurrent feedback cannot lose an update and
+   * a retried call applies its receipt exactly once. A concurrent asset write is retried.
+   */
+  private async settleFitness(homeAddress: HomeAddress, assetId: string): Promise<StoredAsset> {
+    for (let attempt = 0; ; attempt++) {
+      const current = this.store.readAsset(homeAddress, assetId)
+      const fitness = fitnessFromReceipts(this.ledger.listReceipts(assetId))
+      if (current.fitness === fitness) return current
+      try {
+        return await this.store.updateAsset(homeAddress, assetId, { fitness, expectedRevision: current.revision })
+      } catch (error) {
+        if (attempt >= 2 || !/revision conflict/.test(errorMessage(error))) throw error
+      }
     }
   }
 
@@ -3831,6 +3846,13 @@ function publicAsset(asset: ReturnType<HomeStore['readAsset']>): Record<string, 
 
 function kindPrefix(kind: MutableKind): string {
   return ({ memory: 'mem', insight: 'insight', knowledge: 'knowledge', method: 'method' } as const)[kind]
+}
+
+/** Replay receipts in recorded order, clamping after each step as incremental updates did. */
+function fitnessFromReceipts(receipts: readonly FitnessReceipt[]): number {
+  return [...receipts]
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    .reduce((fitness, receipt) => Math.max(-1, Math.min(1, fitness + fitnessDelta(receipt.signal))), 0)
 }
 
 function fitnessDelta(signal: FitnessSignal): number {

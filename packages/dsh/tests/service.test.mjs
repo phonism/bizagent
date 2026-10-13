@@ -1065,3 +1065,42 @@ test('publish and retire cannot change the reviewed content', async t => {
   await assert.rejects(() => service.updateMemory(alice, { assetId: draft.asset.id, action: 'retire',
     body: 'Rewritten while retiring.' }), /cannot change/)
 })
+
+test('fitness feedback is neither lost under concurrency nor after a crash between writes', async t => {
+  const root = await makeTempDir('bizagent-fitness-settle-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const runtime = await createDemoRuntime()
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'personal:alice', owner: 'alice' })
+  const service = new BizAgentService(store, runtime.ledger, { homeRoot: root, defaultHome: 'personal:alice',
+    autoCreateDefaultHome: false, workspaceHomes: [{ root, address: 'personal:alice' }],
+    budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 } }, runtime.sessionQuery)
+  await service.initialize()
+  const first = runtime.agent('session-first', root, 'Use the rule.')
+  const second = runtime.agent('session-second', root, 'Use the rule too.')
+  const { asset } = await service.remember(first, 'call-rule', { description: 'GMV rule', body: 'Exclude refunds.' })
+
+  await Promise.all([
+    service.feedback(first, 'call-confirm', { assetId: asset.id, signal: 'confirmed' }),
+    service.feedback(second, 'call-confirm', { assetId: asset.id, signal: 'confirmed' }),
+  ])
+  assert.equal(store.readAsset('personal:alice', asset.id).fitness, 0.4)
+
+  // The receipt is written, then the process dies before the asset write.
+  const updateAsset = store.updateAsset.bind(store)
+  let failNext = true
+  store.updateAsset = async (...args) => {
+    if (failNext) { failNext = false; throw new Error('simulated crash before the asset write') }
+    return updateAsset(...args)
+  }
+  const third = runtime.agent('session-third', root, 'It was wrong this time.')
+  await assert.rejects(() => service.feedback(third, 'call-fail', { assetId: asset.id, signal: 'failed' }), /simulated crash/)
+  assert.equal(store.readAsset('personal:alice', asset.id).fitness, 0.4)
+  const retried = await service.feedback(third, 'call-fail', { assetId: asset.id, signal: 'failed' })
+  assert.equal(retried.idempotentReplay, true)
+  assert.equal(Math.round(store.readAsset('personal:alice', asset.id).fitness * 10) / 10, 0.1)
+  // A further replay does not apply the same receipt twice.
+  await service.feedback(third, 'call-fail', { assetId: asset.id, signal: 'failed' })
+  assert.equal(Math.round(store.readAsset('personal:alice', asset.id).fitness * 10) / 10, 0.1)
+})
