@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const files = [
-  'README.md', 'README.zh-CN.md', 'CONTRIBUTING.md', 'packages/dsh/README.md',
+  'README.md', 'README.zh-CN.md', 'CONTRIBUTING.md', 'SECURITY.md', 'packages/dsh/README.md',
+  'packages/dsh/CHANGELOG.md',
 ].map(path => join(root, path))
 for (const directory of [
-  'docs', 'packages/dsh/docs', 'packages/dsh/examples', '.github',
+  'packages/dsh/docs', 'packages/dsh/examples', '.github',
 ]) await collect(join(root, directory))
 
 const failures = []

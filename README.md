@@ -1,45 +1,81 @@
 # BizAgent
 
-Organizational learning for long-running agents on [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
+Long-term memory and teamwork for agents on [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
 **Languages**: [English](./README.md) | [中文](./README.zh-CN.md)
 
-BizAgent is a DSH plugin. DSH runs the agent; BizAgent helps agents and the organization
-around them keep what they learn:
+BizAgent is a DSH plugin. DSH runs the agents; BizAgent gives each long-running agent a Home that
+outlives any single chat, and lets a small team of agents learn and work together:
 
-- **Agent Homes**: a stable identity for each long-running agent, separate from any single
-  Session or Workspace.
-- **Evidence-backed memory**: experience is saved as memory, insight, knowledge, or method,
-  each linked to the events it came from. New lessons start as candidates and become active
-  only after review.
-- **Governed sharing**: one agent can propose a lesson to another agent's Home, but only the
-  target's owner can accept it.
+- **Homes.** Each agent keeps its identity, memories, knowledge, and methods in a Home: plain
+  Markdown and YAML files you can read. Every new chat with that agent starts from what its Home
+  already knows.
+- **Lessons with evidence.** When you correct an agent or teach it a rule, it saves the lesson with
+  a link back to the conversation it came from. Lessons it still needs to check stay candidates
+  until it confirms them.
+- **Sharing with consent.** An agent can propose a lesson to another agent's Home, but only that
+  Home's owner can accept it.
+- **Work between agents.** Agents send each other Inbox messages, hand off formal Work with one
+  accountable result, and run Projects whose result a person accepts.
 
-## Status
+## Quick start
 
-BizAgent is preparing its 1.0 release. The current published code is the
-`0.1.0-alpha.2` local single-user alpha. Interfaces and storage formats may still change
-before 1.0.
+You need Node.js 22.19+ or 24+, [pnpm](https://pnpm.io), and a model: a DeepSeek API key, or any
+OpenAI-compatible endpoint.
 
-## Getting started
+```sh
+npm install --global @deepseek-ai/dsh@0.2.0-rc.2 pnpm
 
-The plugin lives in [`packages/dsh`](./packages/dsh/README.md). See the
-[quick start](./packages/dsh/docs/quickstart.md) to build it and install it into DSH.
+git clone https://github.com/phonism/bizagent.git
+cd bizagent/packages/dsh
+npm ci && npm run build && npm pack
+dsh plugin --profile web add "$PWD"/bizagent-dsh-*.tgz
+
+export DEEPSEEK_API_KEY=sk-...   # or add another model in DSH Settings
+dsh --profile web
+```
+
+DSH opens your browser. Click **BizAgent organization** at the bottom left, then
+**Create sample team**. The sample team comes with a small orders file and a five-minute guide:
+teach the analyst a rule, start a Project, let the analyst do the work in its own session, accept
+the result, and share the rule with the team.
+
+The [quick start guide](./packages/dsh/docs/quickstart.md) covers other models, your own
+organization, and troubleshooting.
+
+## Try it without a model
+
+The Learning Lab runs three scripted cases against the real BizAgent services, with temporary data
+and no model or DSH process:
 
 ```sh
 cd packages/dsh
 npm ci
-npm test
+npm run examples
 ```
 
-## Repository history
+## Documentation
 
-Earlier versions of this repository also contained a Claude Code / Agent SDK runtime
-(`packages/bizagent`). It is no longer developed here; DSH is the only supported runtime.
+- [Quick start](./packages/dsh/docs/quickstart.md)
+- [Concepts](./packages/dsh/docs/concepts.md): Homes, memory, proposals, Inbox, Work, Projects
+- [Configuration](./packages/dsh/docs/configuration.md)
+- [Architecture and trust model](./packages/dsh/docs/architecture.md)
+- [Agent tools](./packages/dsh/docs/tools.md) (generated from the code)
+- [Learning Lab](./packages/dsh/examples/README.md)
+- [Changelog](./packages/dsh/CHANGELOG.md)
+
+## Status
+
+BizAgent is preparing its 1.0 release. It targets DSH `0.2.0-rc.2` and runs as a single-person
+local setup: one person owns the organization and reviews its results in the DSH web app.
+Interfaces may still change before 1.0.
+
+Earlier versions of this repository also contained a Claude Code / Agent SDK runtime. It is no
+longer developed here; DSH is the only supported runtime.
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Security reports: [SECURITY.md](./SECURITY.md).
 
 ## License
 

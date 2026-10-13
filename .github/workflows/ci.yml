@@ -33,6 +33,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - run: node scripts/tools-reference.mjs --check
       - run: npm run smoke
       - run: node examples/learning-lab.mjs
       - run: npm run pack:check

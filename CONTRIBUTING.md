@@ -17,6 +17,19 @@ npm run smoke
 npm run pack:check
 ```
 
+Runtime smokes start isolated DSH profiles against a local fake model. They need the DSH CLI the
+package targets on `PATH`:
+
+```sh
+npm install --global @deepseek-ai/dsh@0.2.0-rc.2
+npm run smoke:plugin-add   # install the packed tarball with `dsh plugin add`
+npm run smoke:local-human  # web profile: Principals, Project Main, Work, human acceptance
+npm run smoke:agent && npm run smoke:work && npm run smoke:project && npm run smoke:learning
+```
+
+After changing an Agent tool, regenerate the [tool reference](packages/dsh/docs/tools.md) with
+`npm run docs:tools`; CI fails when it is out of date.
+
 `npm test` builds the package before testing. Automated tests must not call paid models or
 depend on private infrastructure. Tests that open local HTTP listeners may need a normal
 development environment; report `listen EPERM` as an environment limitation rather than

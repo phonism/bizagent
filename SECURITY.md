@@ -44,7 +44,8 @@ The plugin is built for one person using DSH on their own machine.
 - DSH Web runs locally and binds `127.0.0.1`. Binding it to any other interface (for example
   `0.0.0.0`) is unsupported. The plugin's UI routes and local human routes refuse to start when
   DSH Web is not bound to `127.0.0.1`.
-- Anyone who can reach the DSH port, and any code running as the same OS user, is trusted.
+- The person signed in to DSH Web (with the login cookie DSH issues from the URL it prints) is the
+  local owner. Any code running as the same OS user is trusted.
 - Agents are not trusted to follow only your instructions. Any Agent may be prompt-injected.
 - Content written by another Home (Inbox mail, Work requests, Project and Seat text, proposals) is
   lower-trust data for the Home that receives it.
@@ -56,10 +57,13 @@ The plugin is built for one person using DSH on their own machine.
 - **Reviewed cross-Home changes.** Learning reaches another Home only as a proposal that the target
   Home's owner reviews.
 - **Human-only Project acceptance.** Agents can request rework, but final Project acceptance goes
-  through the local human route, which requires a Bearer token.
+  through the local human route, which requires DSH Web's browser login or a configured Bearer
+  token.
+- **Logged-in API.** When DSH Web provides its login (DSH 0.2), every BizAgent route requires it,
+  so other local programs cannot read or change Homes through the BizAgent API without it.
 - **Integrity-checked snapshots.** Worklog, Work, and Project artifacts are stored as SHA-256-checked
   snapshots. Files are read without following symlinks and must still be the file that was checked.
-- **Route guard.** Every HTTP route the plugin registers requires a loopback `Host`, rejects
+- **Route guard.** Every HTTP route the plugin registers also requires a loopback `Host`, rejects
   cross-site requests (`Sec-Fetch-Site: cross-site`), and requires a same-origin `Origin` for any
   request that changes state. This blocks DNS-rebinding and cross-site request attacks from web pages.
 - **Owner-scoped automation.** Automatic worker Sessions and Inbox wake-ups start only between Homes
@@ -70,11 +74,12 @@ The plugin is built for one person using DSH on their own machine.
 ## What it does not protect against
 
 - **Agents running shell or file tools as your OS user.** DSH's `workspace-write` sandbox limits
-  writes only. An Agent can read any file you can read, including other Homes, the ledgers, and the
-  local human token file. Home isolation and human review are enforced by the plugin's own tools;
-  they are cooperative rules, not OS security boundaries.
-- **A same-user Agent using the local human token.** An Agent that reads the token file can call the
-  human routes as you.
+  writes only. An Agent can read any file you can read, including other Homes, the ledgers, DSH's
+  credential store that signs its login cookie, and a configured local human token file. Home
+  isolation and human review are enforced by the plugin's own tools; they are cooperative rules,
+  not OS security boundaries.
+- **A same-user Agent forging your login.** An Agent that reads those secrets can call the human
+  routes as you.
 - **Malicious Home files.** A tampered `home.yaml`, `identity.md`, `organization.yaml`,
   `directory.yaml`, or an imported Home archive from an untrusted source. The plugin validates these
   files, but treats them as under your control.
@@ -86,10 +91,11 @@ The plugin is built for one person using DSH on their own machine.
 
 - Keep DSH Web on `127.0.0.1`. For remote access, use SSH port forwarding instead of binding another
   interface.
-- Keep the local human token file (`BIZAGENT_LOCAL_HUMAN_TOKEN_FILE`) at mode `0600`, owned by you,
-  and outside every DSH Workspace and Home directory.
-- Map `workspaceHomes` deliberately. Give Homes the same `owner` only when they should be able to
-  start work in each other's mapped Workspaces.
+- Do not share the login URL DSH prints; whoever opens it acts as you.
+- If you configure a local human token file (`BIZAGENT_LOCAL_HUMAN_TOKEN_FILE`) for scripts, keep it
+  at mode `0600`, owned by you, and outside every DSH Workspace and Home directory.
+- Give Homes the same `owner` only when they should be able to start work in each other's
+  Workspaces, and map `workspaceHomes` deliberately.
 - Review candidate memories and proposals before accepting them. Accepted text is shown to future
   Sessions of that Home.
 - Do not import Home archives from sources you do not trust.

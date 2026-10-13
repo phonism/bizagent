@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased (1.0.0)
+
+Everything since `0.1.0-alpha.2`, toward the first stable release.
+
+### Runs on DSH 0.2
+
+- Targets DSH `0.2.0-rc.2`, the current `latest` on npm. DSH 0.2 skips plugins whose DSH peers
+  name another line, so 0.1 builds no longer load.
+- Sessions that BizAgent starts (Principals, Project Mains, Work workers, Inbox wake-ups, learning
+  reviews) join DSH's default agent preset and use the host's default model. Without the model,
+  resumed sessions failed every turn on DSH 0.2.
+- Chats opened from the panel are attached to a workspace named after their Home and appear in the
+  DSH sidebar.
+
+### Works out of the box
+
+- **Create sample team** in first-time setup builds *Sample Shop* (a growth lead, a data analyst,
+  a metric capability, and a small `orders.csv`) with a five-minute guide on the Organization page.
+- The local person owns the Homes BizAgent creates (`owner` option; defaults to
+  `BIZAGENT_LOCAL_HUMAN_ID` or the OS user name). Before, the default Home had no owner and
+  onboarding organizations were owned by member ids, so nobody could accept their results.
+- In DSH Web the person signed in to DSH is the reviewer: accepting a Project, deciding proposals,
+  and reading My Inbox need no BizAgent token. A Bearer token file remains for scripts.
+- Formal Work and Inbox wake-ups start in the assignee Home's own folder when no `workspaceHomes`
+  mapping exists, so teammates created in the UI pick up handed-off work.
+- `timeZone` option for cron schedules and daily limits (default: the host time zone) instead of
+  fixed Asia/Shanghai time.
+
+### Safer
+
+- Every BizAgent HTTP route requires DSH Web's login when DSH provides it, in addition to the
+  loopback, cross-site, and same-origin checks. Cross-owner Work never starts on its own.
+- Text from other Homes reaches the model fenced as data. Evidence reads stay within the
+  session's own Home. Snapshots of files are read without following symlinks.
+- Session and record ids are scoped to the session and its tool call, so parallel and replayed
+  calls cannot collide. One damaged record or Home file is isolated instead of stopping startup.
+
+### Smaller and clearer
+
+- The package keeps the learning core, Inbox, formal Work, and a narrowed Project loop (create,
+  invite, join, submit, rework, human acceptance). Internal integrations from earlier development
+  were removed; 59 Agent tools remain.
+- The main entry exports only the DSH plugin and its types. Building blocks for hosts with their
+  own login moved to `@bizagent/dsh/host`.
+- Tool results are compact JSON, and Project and Work reads return summaries.
+- English documentation: quick start, concepts, configuration, architecture, and a tool
+  reference generated from the code. License changed to MIT.
+
 ## 0.1.0-alpha.2
 
 - 新增首次组织设置：使命、团队模板、成员/角色与共享能力可在一个流程中确认并批量创建；

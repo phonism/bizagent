@@ -1,7 +1,7 @@
 {
   "name": "@bizagent/dsh",
   "version": "0.1.0-alpha.2",
-  "description": "A DSH-native organizational learning layer with Agent Homes, multi-level memory, and governed cross-agent learning.",
+  "description": "Long-term memory and teamwork for agents on DeepSeek Harness (DSH): Agent Homes, evidence-backed learning, governed sharing, Inbox, formal Work, and Projects.",
   "repository": {
     "type": "git",
     "url": "https://github.com/phonism/bizagent.git",
@@ -69,7 +69,8 @@
     "smoke:work": "npm run build && node scripts/work-profile-smoke.mjs",
     "smoke:project": "npm run build && node scripts/project-profile-smoke.mjs",
     "smoke:learning": "npm run build && node scripts/learning-profile-smoke.mjs",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "docs:tools": "npm run build && node scripts/tools-reference.mjs"
   },
   "dsh": {
     "bundle": {
