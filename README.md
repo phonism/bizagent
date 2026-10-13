@@ -18,6 +18,8 @@ outlives any single chat, and lets a small team of agents learn and work togethe
 - **Work between agents.** Agents send each other Inbox messages, hand off formal Work with one
   accountable result, and run Projects whose result a person accepts.
 
+![The BizAgent panel in DSH, showing the Sample Shop team and its five-minute guide](./assets/screenshots/sample-team.png)
+
 ## Quick start
 
 You need Node.js 22.19+ or 24+, [pnpm](https://pnpm.io), and a model: a DeepSeek API key, or any
@@ -42,6 +44,27 @@ the result, and share the rule with the team.
 
 The [quick start guide](./packages/dsh/docs/quickstart.md) covers other models, your own
 organization, and troubleshooting.
+
+## The sample team, step by step
+
+These screenshots come from one run of the guide with an open model (Qwen3.8 27B).
+
+**1. Teach a rule.** Tell the data analyst that GMV excludes cancelled and refunded orders. It
+saves the rule in its Home, linked to the conversation it came from, and every later chat with the
+analyst starts with it.
+
+![The data analyst's Learning page with the saved GMV rule and its evidence](./assets/screenshots/learning.png)
+
+**2–3. Run a Project and accept the result.** The growth lead starts a Project. Its chat hands
+formal Work to the analyst, who computes GMV from `orders.csv` in its own session; the lead checks
+the number and submits it. Only you can accept it.
+
+![A Project result waiting for acceptance: GMV 400.50 with its evidence](./assets/screenshots/project-review.png)
+
+**4. Share with the team.** The analyst proposes the rule to the Sample Shop Home. It changes
+nothing there until the Home's owner accepts it.
+
+![A proposal from the data analyst waiting in the Sample Shop Home's inbox](./assets/screenshots/proposal.png)
 
 ## Try it without a model
 

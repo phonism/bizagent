@@ -7,6 +7,8 @@ methods, kept as plain files and loaded into every new session. Agents save less
 the conversations they came from, propose lessons to each other's Homes, send each other mail,
 hand off formal Work, and run Projects that a person accepts.
 
+![The BizAgent panel in DSH, showing the Sample Shop team and its five-minute guide](https://raw.githubusercontent.com/phonism/bizagent/main/assets/screenshots/sample-team.png)
+
 ## Install
 
 Requires Node.js 22.19+ or 24+, [pnpm](https://pnpm.io), and DSH `0.2.0-rc.2`.

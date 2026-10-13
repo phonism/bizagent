@@ -14,6 +14,8 @@ BizAgent 是一个 DSH 插件。DSH 负责运行 Agent；BizAgent 给每个长�
 - **经过同意的分享。** 一个 Agent 可以把经验提议给另一个 Agent 的 Home，但只有那个 Home 的主人能接受。
 - **Agent 之间协作。** Agent 之间可以发信、派正式工作（只有一份要负责的结果），也可以一起跑项目，最后由人来验收。
 
+![DSH 里的 BizAgent 面板：示例商店团队和 5 分钟上手指南](./assets/screenshots/sample-team.png)
+
 ## 快速开始
 
 需要 Node.js 22.19 以上或 24 以上、[pnpm](https://pnpm.io)，以及一个模型：DeepSeek API Key，或任意兼容 OpenAI 接口的模型服务。
@@ -35,6 +37,24 @@ DSH 会打开浏览器。点左下角的 **BizAgent organization**，再点 **Cr
 验收结果、再把规则分享给团队。
 
 换用其他模型、建自己的组织、常见问题，见[快速上手](./packages/dsh/docs/quickstart.md)（英文）。
+
+## 示例团队，一步一步
+
+下面的截图来自用开源模型（Qwen3.8 27B）实际跑一遍上手指南。界面语言跟随浏览器，截图是英文界面。
+
+**1. 教一条规则。** 告诉数据分析师"GMV 不算已取消和已退款的订单"。它把规则存进自己的 Home，记下来自哪段对话；
+以后和分析师的每段新对话都会带上这条规则。
+
+![数据分析师的学习页：存下的 GMV 规则和它的来源](./assets/screenshots/learning.png)
+
+**2–3. 跑一个项目，再验收结果。** 增长负责人发起项目。项目对话把正式工作派给分析师，分析师在自己的会话里用
+`orders.csv` 算出 GMV；负责人复核后提交。只有你能点验收。
+
+![等待验收的项目结果：GMV 400.50 和它的依据](./assets/screenshots/project-review.png)
+
+**4. 分享给团队。** 分析师把规则提议给示例商店的 Home。在 Home 的主人接受之前，那边什么都不会变。
+
+![示例商店 Home 收件箱里，数据分析师发来的提议](./assets/screenshots/proposal.png)
 
 ## 不用模型先试试
 
