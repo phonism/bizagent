@@ -29,7 +29,7 @@ function factory(runtime, { createFailure } = {}) {
     const idlePromise = new Promise(resolve => { settleIdle = resolve })
     idle.set(id, settleIdle)
     const agent = {
-      id, session: { header: { id, cwd }, events: structuredClone(snapshot.events) },
+      id, session: { snapshotEvents() { return this.events }, header: { id, cwd }, events: structuredClone(snapshot.events) },
       inbox: { nextTurn: [], nextStep: [] },
       followup(message) {
         prompts.push(message)
@@ -67,17 +67,19 @@ function factory(runtime, { createFailure } = {}) {
 test('learning usage counts durable stream reports once and keeps missing accounting visible', () => {
   const usage = summarizeLearningUsage([
     { seq: 0, type: 'step/start', data: { turn: 1, step: 1 } },
-    { seq: 1, type: 'assistant/chunk', data: { turn: 1, step: 1,
-      chunk: { type: 'usage', usage: { inputTokens: 10, outputTokens: 4,
-        cacheReadTokens: 20, cacheWriteTokens: 3, reasoningTokens: 2 } } } },
-    { seq: 2, type: 'assistant/message', data: { turn: 1, step: 1,
+    // A failed attempt that still reported usage, then the committed message for the same step.
+    { seq: 1, type: 'assistant/attempt', data: { turn: 1, step: 1, stream: [
+      { type: 'chunk', time: 1, chunk: { type: 'usage', usage: { inputTokens: 3, outputTokens: 1 } } }] } },
+    { seq: 2, type: 'assistant/message', data: { turn: 1, step: 1, stream: [
+      { type: 'chunk', time: 2, chunk: { type: 'usage', usage: { inputTokens: 10, outputTokens: 4,
+        cacheReadTokens: 20, cacheWriteTokens: 3, reasoningTokens: 2 } } }],
       usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 20 } } },
     { seq: 3, type: 'step/start', data: { turn: 1, step: 2 } },
-    { seq: 4, type: 'assistant/message', data: { turn: 1, step: 2,
+    { seq: 4, type: 'assistant/message', data: { turn: 1, step: 2, stream: [],
       usage: { inputTokens: 5, outputTokens: 1 } } },
     { seq: 5, type: 'step/start', data: { turn: 1, step: 3 } },
   ])
-  assert.deepEqual(usage, { status: 'partial', reported: { inputTokens: 15, outputTokens: 5,
+  assert.deepEqual(usage, { status: 'partial', reported: { inputTokens: 18, outputTokens: 6,
     cacheReadTokens: 20, cacheWriteTokens: 3, reasoningTokens: 2 },
     reportedSteps: 2, unreportedSteps: 1, lastEventSeq: 5, costUsd: null })
   const missing = summarizeLearningUsage([{ seq: 0, type: 'step/start',
@@ -111,9 +113,9 @@ test('explicit learning launch reserves one dedicated Session and records its co
   assert.equal(runtime.ledger.getBinding(started.launch.workerSessionId).homeAddress, 'personal:alice')
   runtime.appendSessionEvent(started.launch.workerSessionId, { seq: 1, type: 'step/start',
     data: { turn: 1, step: 1 } })
-  runtime.appendSessionEvent(started.launch.workerSessionId, { seq: 2, type: 'assistant/chunk',
-    data: { turn: 1, step: 1, chunk: { type: 'usage',
-      usage: { inputTokens: 7, outputTokens: 2, cacheReadTokens: 11 } } } })
+  runtime.appendSessionEvent(started.launch.workerSessionId, { seq: 2, type: 'assistant/message',
+    data: { turn: 1, step: 1, stream: [{ type: 'chunk', time: 2, chunk: { type: 'usage',
+      usage: { inputTokens: 7, outputTokens: 2, cacheReadTokens: 11 } } }] } })
   const observed = await runner.read(requester, started.launch.id)
   assert.equal(observed.usage.status, 'reported')
   assert.equal(observed.usage.reported.inputTokens, 7)

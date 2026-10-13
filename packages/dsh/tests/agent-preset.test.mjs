@@ -11,7 +11,8 @@ function fakeRuntime({ roster, headers = [] } = {}) {
     resume: async options => { calls.push(['resume', options]); return { agent: { id: options.resumeSessionId } } },
   }
   const sessions = { listSessions: async () => headers.map(header => ({ header, persisted: true })) }
-  return { calls, wrapped: withAgentPreset(ctx, agents, sessions) }
+  const defaultModel = () => ({ provider: 'default-provider', model: 'default-model' })
+  return { calls, wrapped: withAgentPreset(ctx, agents, sessions, defaultModel) }
 }
 
 function fakeRoster() {
@@ -47,11 +48,20 @@ test('resumed Sessions rejoin the preset recorded on their header', async () => 
   assert.deepEqual(roster.mounts, [['agent-s2', 'analyst']])
 })
 
-test('without a preset roster the factory options pass through unchanged', async () => {
+test('without a preset roster only the default model is added', async () => {
   const { calls, wrapped } = fakeRuntime()
   const setup = () => {}
+  const model = { provider: 'default-provider', model: 'default-model' }
   await wrapped.create({ sessionId: 's3', meta: { cwd: '/w' }, setup })
   await wrapped.resume({ resumeSessionId: 's3' })
-  assert.deepEqual(calls[0][1], { sessionId: 's3', meta: { cwd: '/w' }, setup })
-  assert.deepEqual(calls[1][1], { resumeSessionId: 's3' })
+  assert.deepEqual(calls[0][1], { agentOptions: model, sessionId: 's3', meta: { cwd: '/w' }, setup })
+  assert.deepEqual(calls[1][1], { agentOptions: model, resumeSessionId: 's3' })
+})
+
+test('a resumed Session gets the default model unless the caller chose one', async () => {
+  const { calls, wrapped } = fakeRuntime()
+  await wrapped.resume({ resumeSessionId: 's4' })
+  await wrapped.resume({ resumeSessionId: 's5', agentOptions: { provider: 'p', model: 'chosen' } })
+  assert.equal(calls[0][1].agentOptions.model, 'default-model')
+  assert.equal(calls[1][1].agentOptions.model, 'chosen')
 })

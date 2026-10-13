@@ -18,18 +18,20 @@ export interface LearningUsage {
 }
 
 export function summarizeLearningUsage(events: readonly SessionEvent[]): LearningUsage {
-  const steps = new Map<string, { started: boolean; chunks: TokenUsage[]; fallback?: TokenUsage }>()
+  const steps = new Map<string, { started: boolean; usages: TokenUsage[] }>()
   for (const event of events) {
-    if (event.type !== 'step/start' && event.type !== 'assistant/chunk'
+    if (event.type !== 'step/start' && event.type !== 'assistant/attempt'
       && event.type !== 'assistant/message') continue
     const key = `${event.data.turn}:${event.data.step}`
-    const step: { started: boolean; chunks: TokenUsage[]; fallback?: TokenUsage } =
-      steps.get(key) ?? { started: false, chunks: [] }
+    const step = steps.get(key) ?? { started: false, usages: [] }
     if (event.type === 'step/start') step.started = true
-    else if (event.type === 'assistant/chunk' && event.data.chunk.type === 'usage') {
-      step.chunks.push(event.data.chunk.usage)
-    } else if (event.type === 'assistant/message' && event.data.usage !== undefined) {
-      step.fallback = event.data.usage
+    else {
+      // Each model attempt (failed retries included) counts once: its streamed usage reports,
+      // or the message's own total when the adapter reported no usage chunk.
+      const streamed = (event.data.stream ?? []).flatMap(record =>
+        record.type === 'chunk' && record.chunk.type === 'usage' ? [record.chunk.usage] : [])
+      if (streamed.length > 0) step.usages.push(...streamed)
+      else if (event.type === 'assistant/message' && event.data.usage !== undefined) step.usages.push(event.data.usage)
     }
     steps.set(key, step)
   }
@@ -38,7 +40,7 @@ export function summarizeLearningUsage(events: readonly SessionEvent[]): Learnin
   let reportedSteps = 0
   let unreportedSteps = 0
   for (const step of steps.values()) {
-    const usages = step.chunks.length > 0 ? step.chunks : step.fallback ? [step.fallback] : []
+    const usages = step.usages
     if (usages.length === 0) {
       if (step.started) unreportedSteps += 1
       continue

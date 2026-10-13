@@ -24,10 +24,10 @@ test('local human token stays in memory and is sent only to protected human rout
   t.after(() => { globalThis.fetch = originalFetch })
 
   const port = new BizAgentUiHttpPort()
-  assert.deepEqual(await port.localHumanStatus(), { available: true, authenticated: false })
+  assert.deepEqual(await port.localHumanStatus(), { available: true, authenticated: false, viaToken: false })
   const token = 'a'.repeat(64)
   assert.equal(await port.setLocalHumanToken(token), true)
-  assert.deepEqual(await port.localHumanStatus(), { available: true, authenticated: true })
+  assert.deepEqual(await port.localHumanStatus(), { available: true, authenticated: true, viaToken: true })
   await port.humanInbox('incoming', true)
   await port.projectReviewAccess('project-1')
   await port.proposalReviewActions('personal:alice', 'proposal-1')

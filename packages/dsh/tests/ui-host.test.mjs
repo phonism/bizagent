@@ -45,6 +45,7 @@ function agent(id, cwd, text = 'Reusable learning') {
   return {
     id,
     session: {
+      snapshotEvents() { return this.events },
       header: { id, cwd },
       events: [
         { seq: 0, type: 'turn/start', data: { turn: 1 } },
@@ -278,6 +279,7 @@ test('Agent directory UI route uses the server-side Session and rechecks selecte
   const sessionEvents = []
   applyUiHost({
     bizagent: service,
+    get: () => undefined,
     sessionQuery: { async readSession(id) {
       if (String(id) !== 'directory-session') throw new Error('missing Session')
       return { session: { id, cwd: root }, events: sessionEvents }
@@ -384,7 +386,7 @@ test('Project UI routes retain Session Home visibility', async t => {
     idempotencyKey: 'ui-project-review',
   })).project
   const routes = new Map()
-  applyUiHost({ bizagent: service, sessionQuery: runtime.sessionQuery,
+  applyUiHost({ bizagent: service, get: () => undefined, sessionQuery: runtime.sessionQuery,
     webServer: { host: '127.0.0.1',
       register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     effect() {} })
@@ -435,7 +437,7 @@ test('learning schedule UI mutation checks origin and forwards revision to the h
       return { homeAddress: home, policy: { revision: input.expectedRevision + 1 } }
     },
   }
-  applyUiHost({ bizagent: service, bizagentLearningScheduler: scheduler,
+  applyUiHost({ bizagent: service, get: () => undefined, bizagentLearningScheduler: scheduler,
     webServer: { host: '127.0.0.1',
       register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     effect() {},
@@ -468,7 +470,7 @@ test('learning schedule UI mutation checks origin and forwards revision to the h
 
 function routeHarness(service, extra = {}) {
   const routes = new Map()
-  applyUiHost({ bizagent: service, ...extra,
+  applyUiHost({ bizagent: service, get: name => extra.services?.[name], ...extra,
     webServer: { host: '127.0.0.1',
       register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     effect() {} })
@@ -573,8 +575,24 @@ test('UI route errors return stable codes without raw exception text or absolute
 test('UI host refuses to register routes unless DSH Web binds loopback', async t => {
   const { service } = await fixture(t)
   const routes = new Map()
-  assert.throws(() => applyUiHost({ bizagent: service,
+  assert.throws(() => applyUiHost({ bizagent: service, get: () => undefined,
     webServer: { host: '0.0.0.0', register(route) { routes.set(route.path, route); return () => {} } },
     effect() {} }), /require DSH Web to bind 127\.0\.0\.1/)
   assert.equal(routes.size, 0)
+})
+
+test('UI routes require DSH browser login when the host provides it', async t => {
+  const { service } = await fixture(t)
+  const connection = { requestRejection: request => request.headers.cookie === 'dsh-login=valid' ? undefined : 401 }
+  const call = routeHarness(service, { services: { connection } })
+  const headers = { host: '127.0.0.1:4100' }
+  const anonymous = await call('/api/bizagent/v1/overview', { headers })
+  assert.equal(anonymous.status, 401)
+  assert.equal(anonymous.body.error.code, 'authentication-required')
+  assert.equal((await call('/api/bizagent/v1/overview', { headers: { ...headers, cookie: 'dsh-login=valid' } })).status, 200)
+  const create = await call('/api/bizagent/v1/homes', { method: 'POST',
+    headers: { ...headers, origin: 'http://127.0.0.1:4100', 'content-type': 'application/json' },
+    body: { address: 'role:sneaky' } })
+  assert.equal(create.status, 401)
+  assert.equal(service.store.hasHome('role:sneaky'), false)
 })

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { HumanTurnCompletionNotifier, humanTurnInboxMessageId } from '../lib/human-turn-completion.js'
 import { HumanNotificationRunner } from '../lib/human-notification-runner.js'
 import { createDemoRuntime } from '../examples/demo-runtime.mjs'
@@ -19,13 +20,13 @@ test('a persisted human turn reaches only its verified asker and opt-out keeps i
     { seq: 3, time: now - 2_000, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
     { seq: 4, time: now - 1_500, type: 'turn/start', data: { turn: 2 } },
     { seq: 5, time: now - 1_400, type: 'user/message', data: {
-      source: { kind: 'plugin', plugin: 'scheduler' }, content: [{ type: 'text', text: 'Auto report' }] } },
+      source: { kind: 'scheduler' }, content: [{ type: 'text', text: 'Auto report' }] } },
     { seq: 6, time: now - 1_200, type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } },
     { seq: 7, time: now - 900, type: 'turn/start', data: { turn: 3 } },
     { seq: 8, time: now - 800, type: 'user/message', data: {
       source: { kind: 'user' }, content: [{ type: 'text', text: 'Still running' }] } },
   ]
-  const persisted = { meta: { version: 0, id: sessionId, cwd, createdAt: now - 60_000 }, events }
+  const persisted = { meta: { version: SESSION_FORMAT_VERSION, id: sessionId, cwd, createdAt: now - 60_000 }, events }
   const sessions = { async inspect(id) {
     assert.equal(id, sessionId)
     return structuredClone(persisted)
@@ -83,7 +84,7 @@ test('completion notice repairs a failed message write and rejects changed autho
     { seq: 2, time: now - 1_000, type: 'turn/end', data: { turn: 0, reason: { kind: 'completed' } } },
   ]
   const sessions = { async inspect() {
-    return structuredClone({ meta: { version: 0, id: sessionId, cwd, createdAt: now - 5_000 }, events })
+    return structuredClone({ meta: { version: SESSION_FORMAT_VERSION, id: sessionId, cwd, createdAt: now - 5_000 }, events })
   } }
   let pagePath = '//unsafe.example'
   let recipient = 'user:alice'

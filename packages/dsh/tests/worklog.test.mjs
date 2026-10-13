@@ -133,7 +133,7 @@ test('completed Work yields one source-verified Worklog after its turn is durabl
     callId: 'complete-call', name: 'bizagent_work_complete',
     arguments: JSON.stringify({ work_id: work.id }) } })
   runtime.appendSessionEvent(worker.id, { seq: 3, type: 'tool/result', data: {
-    turn: 1, message: { content: [{ type: 'tool-result', toolCallId: 'complete-call', content: [] }] },
+    turn: 1, message: { role: 'tool', toolCallId: 'complete-call', content: [] },
   } })
   runtime.appendSessionEvent(worker.id, { seq: 4, type: 'turn/end',
     data: { turn: 1, reason: { kind: 'completed' } } })
@@ -195,7 +195,7 @@ test('ordinary substantive Session turns create an evolving Worklog and recover 
     turn: 1, step: 1, callId: 'inspect', name: 'inspect_data', arguments: '{}',
   } })
   runtime.appendSessionEvent(alice.id, { seq: 3, type: 'tool/result', data: {
-    turn: 1, message: { content: [{ type: 'tool-result', toolCallId: 'inspect', content: [] }] },
+    turn: 1, message: { role: 'tool', toolCallId: 'inspect', content: [] },
   } })
   runtime.appendSessionEvent(alice.id, { seq: 4, type: 'assistant/message', data: {
     turn: 1, message: { content: [{ type: 'text', text: 'The data has three rows.' }] },

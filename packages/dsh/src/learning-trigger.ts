@@ -58,23 +58,23 @@ export class ExplicitCorrectionTrigger implements LearningTrigger {
 }
 
 function hasCompletedLearning(events: readonly SessionEvent[], afterSeq: number): boolean {
-  type CodeDispatchEvent = { type: 'tool/code-dispatch-start' | 'tool/code-dispatch'; seq: number;
+  type DispatchEvent = { type: 'tool/ptc-dispatch-start' | 'tool/ptc-dispatch'; seq: number;
     data: { subCallId: string; name: string; isError?: boolean } }
   const calls = new Set<string>()
   const codeStarts = new Map<string, number>()
   const isLearningTool = (name: string): boolean => name === 'bizagent_memory_remember'
     || name === 'bizagent_learning_checkpoint'
   for (const raw of events) {
-    // Older DSH event logs contain Code Mode dispatches outside the current SDK union.
-    const event = raw as SessionEvent | CodeDispatchEvent
-    if (event.type === 'tool/code-dispatch-start') codeStarts.set(event.data.subCallId, event.seq)
+    // Programmatic tool calls are dispatch events declared by dsh-tools, outside the session union.
+    const event = raw as SessionEvent | DispatchEvent
+    if (event.type === 'tool/ptc-dispatch-start') codeStarts.set(event.data.subCallId, event.seq)
     if (event.seq <= afterSeq) continue
     if (event.type === 'tool/call' && isLearningTool(event.data.name)) calls.add(event.data.callId)
     if (event.type === 'tool/result' && event.data.error === undefined) {
-      const result = event.data.message.content[0]
+      const result = event.data.message
       if (calls.has(result.toolCallId) && !result.isError) return true
     }
-    if (event.type === 'tool/code-dispatch' && isLearningTool(event.data.name)
+    if (event.type === 'tool/ptc-dispatch' && isLearningTool(event.data.name)
       && !event.data.isError && (codeStarts.get(event.data.subCallId) ?? event.seq) > afterSeq) return true
   }
   return false

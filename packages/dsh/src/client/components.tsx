@@ -7,18 +7,20 @@ import {
   type FormEvent,
 } from 'react'
 import {
-  IconCheckOutline16,
-  IconCloseOutline16,
-  IconPlusOutline16,
-  IconRefreshOutline16,
-  IconSearchOutline16,
-  IconWarningOutline16,
+  IconCheckOutlineRegular,
+  IconCloseOutlineRegular,
+  IconPlusOutlineRegular,
+  IconRefreshOutlineRegular,
+  IconSearchOutlineRegular,
+  IconWarningOutlineRegular,
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
-import type { WorkspaceView } from '@deepseek-ai/dsh-client-runtime/client'
+import type { WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
   LearningKind,
   UiAsset,
@@ -98,8 +100,9 @@ export function BizAgentLauncher({ wide, controller, api, t }: LauncherProps) {
 
 export function BizAgentDashboard({ controller, api, openAgentSession, t, useSessions, useWorkspaces }: DashboardProps) {
   const open = useSyncExternalStore(controller.subscribe, controller.getSnapshot).open
-  const currentSessionId = useSessions(state => state.current)
-  const currentCwd = useSessions(state => state.current === undefined ? undefined : state.byId[state.current]?.cwd)
+  // The Session shown in the main view is the one the main view retains (as DSH itself derives it).
+  const currentSessionId = useSessions(state => mainViewSession(state.byId)?.id)
+  const currentCwd = useSessions(state => mainViewSession(state.byId)?.cwd)
   const workspaces = useWorkspaces(state => state.items)
   const currentWorkspace = useMemo(
     () => currentDshWorkspace(workspaces, currentSessionId, currentCwd),
@@ -116,7 +119,6 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
   const [error, setError] = useState<string>()
   const [createOpen, setCreateOpen] = useState(false)
   const [localHumanStatus, setLocalHumanStatus] = useState<'hidden' | 'needed' | 'ready'>('hidden')
-  const [localHumanTokenFile, setLocalHumanTokenFile] = useState<string | undefined>(undefined)
   const [localHumanTokenInput, setLocalHumanTokenInput] = useState('')
   const [localHumanError, setLocalHumanError] = useState(false)
   const [localHumanBusy, setLocalHumanBusy] = useState(false)
@@ -157,8 +159,9 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
     const abort = new AbortController()
     void api.localHumanStatus(abort.signal).then(status => {
       if (abort.signal.aborted) return
-      setLocalHumanStatus(status.available ? status.authenticated ? 'ready' : 'needed' : 'hidden')
-      setLocalHumanTokenFile(status.tokenFile)
+      // Signed in through DSH's own login: nothing to show or clear.
+      setLocalHumanStatus(!status.available || (status.authenticated && status.viaToken === false) ? 'hidden'
+        : status.authenticated ? 'ready' : 'needed')
     }).catch(() => { if (!abort.signal.aborted) setLocalHumanStatus('hidden') })
     return () => { abort.abort() }
   }, [api, open])
@@ -334,7 +337,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
                 disabled={refreshing || loading}
                 onClick={() => { void refresh() }}
               >
-                <IconRefreshOutline16 size={16} />
+                <IconRefreshOutlineRegular size={16} />
               </button>
             </Tooltip>
             <Tooltip label={t('dashboard.close')} delayMs={400}>
@@ -344,7 +347,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
                 aria-label={t('dashboard.close')}
                 onClick={() => { controller.close() }}
               >
-                <IconCloseOutline16 size={16} />
+                <IconCloseOutlineRegular size={16} />
               </button>
             </Tooltip>
           </div>
@@ -366,8 +369,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
                   {t('localHuman.connect')}
                 </button>
                 {localHumanError ? <span role="alert">{t('localHuman.invalid')}</span> : null}
-                <small>{localHumanTokenFile === undefined ? t('localHuman.hint')
-                  : t('localHuman.hintFile', { file: localHumanTokenFile })}</small>
+                <small>{t('localHuman.hint')}</small>
               </form>
             )}
           </div>
@@ -598,7 +600,7 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
               ))}
             </div>
             <button type="button" className="ba-add-row" onClick={() => { setMembers(current => [...current, emptyMember(current.length + 1, t)]) }}>
-              <IconPlusOutline16 size={14} /> {t('setup.member.add')}
+              <IconPlusOutlineRegular size={14} /> {t('setup.member.add')}
             </button>
           </div>
         ) : step === 2 ? (
@@ -617,7 +619,7 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
               ))}
             </div>
             <button type="button" className="ba-add-row" onClick={() => { setCapabilities(current => [...current, emptyCapability(current.length + 1, t)]) }}>
-              <IconPlusOutline16 size={14} /> {t('setup.capability.add')}
+              <IconPlusOutlineRegular size={14} /> {t('setup.capability.add')}
             </button>
             <div className="ba-setup-summary">
               <span className="ba-home-type-dot" data-type="business" />
@@ -821,7 +823,7 @@ function HomeDirectory({ homes, selected, onSelect, onCreate, t }: {
         <span className="ba-pane-meta">{t('directory.count', { count: homes.length })}</span>
       </div>
       <button type="button" className="ba-create-button" onClick={onCreate}>
-        <IconPlusOutline16 size={14} />
+        <IconPlusOutlineRegular size={14} />
         {t('directory.create')}
       </button>
       {homes.length === 0 ? <EmptyState title={t('directory.empty')} hint="" /> : (
@@ -917,7 +919,7 @@ function HomeWorkspace({ api, detail, sessionId, selectedAsset, onSelectAsset, o
           </div>
           <div className="ba-filters">
             <label className="ba-search-wrap">
-              <span className="ba-search-icon"><IconSearchOutline16 size={14} /></span>
+              <span className="ba-search-icon"><IconSearchOutlineRegular size={14} /></span>
               <input
                 className="ba-input"
                 value={query}
@@ -1132,7 +1134,7 @@ function AssetRow({ api, asset, sessionId, open, onToggle, t }: {
               {t('asset.revision', { revision: asset.revision })} · {formatTime(asset.updatedAt)} · {t(`status.${asset.status}` as 'status.active')}
             </span>
             <button type="button" className="ba-icon-button" aria-label={t('asset.close')} onClick={onToggle}>
-              <IconCloseOutline16 size={14} />
+              <IconCloseOutlineRegular size={14} />
             </button>
           </div>
           <p className="ba-detail-copy">{asset.body}</p>
@@ -1393,10 +1395,10 @@ function ProposalDecision({ proposal, targetAsset, ownerAddress, api, onDecision
       {error !== undefined ? <p className="ba-inline-error" role="alert">{t('proposal.failed', { message: error })}</p> : null}
       {reviewActions.accept || reviewActions.reject ? <div className="ba-proposal-actions">
         {reviewActions.reject ? <button type="button" className="ba-button" data-variant="danger" disabled={!decision.trim() || busy !== undefined} onClick={() => { void decide('reject') }}>
-          <IconWarningOutline16 size={14} /> {t('proposal.reject')}
+          <IconWarningOutlineRegular size={14} /> {t('proposal.reject')}
         </button> : null}
         {reviewActions.accept ? <button type="button" className="ba-button" data-variant="primary" disabled={!decision.trim() || busy !== undefined || targetChanged} onClick={() => { void decide('accept') }}>
-          <IconCheckOutline16 size={14} /> {t('proposal.accept')}
+          <IconCheckOutlineRegular size={14} /> {t('proposal.accept')}
         </button> : null}
       </div> : null}
     </div>
@@ -1491,7 +1493,7 @@ function FailureState({ message, retry, retryLabel }: { message: string; retry: 
   return (
     <div className="ba-loading">
       <div className="ba-loading-core" role="alert">
-        <IconWarningOutline16 size={22} />
+        <IconWarningOutlineRegular size={22} />
         <span>{message}</span>
         <button type="button" className="ba-button" onClick={retry}>{retryLabel}</button>
       </div>
@@ -1595,6 +1597,12 @@ function emptyCapability(index: number, t: DashboardProps['t']): CapabilityDraft
     displayName: t('setup.newCapability'),
     responsibility: t('setup.newCapabilityResponsibility'),
   }
+}
+
+function mainViewSession<T extends { retainedBy: { mainView?: number } }>(
+  byId: Readonly<Record<string, T>>,
+): T | undefined {
+  return Object.values(byId).find(session => (session.retainedBy.mainView ?? 0) > 0)
 }
 
 function currentDshWorkspace(

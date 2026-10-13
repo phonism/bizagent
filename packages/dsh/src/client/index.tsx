@@ -1,4 +1,10 @@
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type {} from '@deepseek-ai/dsh-api-session-controller/client'
+import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
@@ -23,18 +29,20 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 export const name = 'bizagent-ui'
-export const inject = ['slots', 'locale', 'inputTriggers', 'sessions', 'workspaces']
+export const inject = ['slots', 'locale', 'inputTriggers', 'sessions', 'workspaces', 'uiWorkspace']
 
-export function apply(ctx: ClientContext): void {
+export function apply(ctx: Context): void {
   const controller = new BizAgentUiController()
   const api = new BizAgentUiHttpPort()
   const face = (): BizAgentUiFace => ({ controller, api,
     openAgentSession: async input => {
       const opened = await api.openAgentSession(input)
       const workspace = await ctx.workspaces.create({ path: opened.workspacePath })
-      const sessionId = opened.sessionId as Parameters<typeof ctx.sessions.open>[0]
+      const sessionId = opened.sessionId as SessionId
       await ctx.workspaces.insertSessionBefore(workspace.workspaceId, sessionId)
-      ctx.sessions.open(sessionId)
+      // The host created this Session; refresh the list so the client knows it before opening.
+      await ctx.sessions.refresh()
+      ctx.uiWorkspace.openSession(sessionId)
       controller.close()
     },
   })

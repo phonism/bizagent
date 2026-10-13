@@ -1,3 +1,4 @@
+import type {} from './message-source.js'
 import type { Agent, AgentHandle, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { freezeMessage, type MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -110,7 +111,7 @@ export class InboxReturnNotifier {
         agent.followup(freezeMessage({
           id: returnPromptId(message, recipient), role: 'user',
           content: [{ type: 'text', text: renderReturnPrompt(message) }],
-          source: { kind: 'plugin', plugin: 'bizagent', form: 'relay' },
+          source: { kind: 'bizagent', form: 'relay' },
         }))
       }
       await this.ledger.putInboxReturnRoute({
@@ -219,7 +220,7 @@ function returnPromptId(message: InboxMessage, recipient: AgentInboxAddress): Me
 
 function hasPrompt(agent: Agent, message: InboxMessage, recipient: AgentInboxAddress): boolean {
   const id = returnPromptId(message, recipient)
-  return agent.session.events.some(event => event.type === 'agent/inbox/spliced'
+  return agent.session.snapshotEvents().some(event => event.type === 'agent/inbox/spliced'
     && event.data.inserted.some(item => item.id === id))
     || agent.inbox.nextTurn.some(item => item.id === id)
     || agent.inbox.nextStep.some(item => item.id === id)

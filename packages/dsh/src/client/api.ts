@@ -35,7 +35,8 @@ export interface UiSharedKnowledgeReviews {
 }
 
 export interface BizAgentUiPort {
-  localHumanStatus?(signal?: AbortSignal): Promise<{ available: boolean; authenticated: boolean; tokenFile?: string }>
+  /** `viaToken` is false when DSH's own browser login already identifies the person. */
+  localHumanStatus?(signal?: AbortSignal): Promise<{ available: boolean; authenticated: boolean; viaToken?: boolean }>
   setLocalHumanToken?(token: string | undefined): Promise<boolean>
   openAgentSession?(input: { homeAddress: string } | { projectId: string }): Promise<{
     kind: 'principal' | 'project-main'; homeAddress: string; logicalAddress: string;
@@ -88,7 +89,7 @@ export class BizAgentUiHttpPort implements BizAgentUiPort {
     return this.localHumanToken === undefined ? {} : { Authorization: `Bearer ${this.localHumanToken}` }
   }
 
-  async localHumanStatus(signal?: AbortSignal): Promise<{ available: boolean; authenticated: boolean; tokenFile?: string }> {
+  async localHumanStatus(signal?: AbortSignal): Promise<{ available: boolean; authenticated: boolean; viaToken?: boolean }> {
     const response = await fetch(BIZAGENT_LOCAL_HUMAN_STATUS_API, {
       cache: 'no-store', credentials: 'same-origin', headers: this.humanHeaders(),
       ...(signal === undefined ? {} : { signal }),
@@ -96,23 +97,20 @@ export class BizAgentUiHttpPort implements BizAgentUiPort {
     if (!response.headers.get('Content-Type')?.startsWith('application/json')) {
       return { available: false, authenticated: false }
     }
-    const value = await response.json() as { userId?: unknown; error?: unknown; tokenFile?: unknown }
+    const value = await response.json() as { userId?: unknown; error?: unknown }
     const authenticated = response.ok && typeof value.userId === 'string'
     if (!authenticated && response.status === 401) this.localHumanToken = undefined
     return { available: authenticated || response.status === 401
       && value.error === 'authentication-required', authenticated,
-    ...(typeof value.tokenFile === 'string' ? { tokenFile: value.tokenFile } : {}) }
+    viaToken: authenticated && this.localHumanToken !== undefined }
   }
 
-  /** Sign this browser in with the local token (the host sets an HttpOnly cookie), or sign out. */
+  /** Hosts without DSH's browser login: verify a local Bearer token and keep it in page memory. */
   async setLocalHumanToken(token: string | undefined): Promise<boolean> {
     this.localHumanToken = undefined
-    if (token === undefined) {
-      await fetch(BIZAGENT_LOCAL_HUMAN_STATUS_API, { method: 'DELETE', cache: 'no-store', credentials: 'same-origin' })
-      return false
-    }
+    if (token === undefined) return false
     const response = await fetch(BIZAGENT_LOCAL_HUMAN_STATUS_API, {
-      method: 'POST', cache: 'no-store', credentials: 'same-origin', headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store', credentials: 'same-origin', headers: { Authorization: `Bearer ${token}` },
     })
     if (!response.ok || !response.headers.get('Content-Type')?.startsWith('application/json')) return false
     const value = await response.json() as { userId?: unknown }

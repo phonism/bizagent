@@ -42,7 +42,7 @@ test('Work runner creates one owned DSH worker, preserves its Home, and resumes 
   let failCreateOnce = true
   function makeHandle(id, cwd, options, events) {
     const worker = {
-      id, options, session: { header: { id, cwd }, events },
+      id, options, session: { snapshotEvents() { return this.events }, header: { id, cwd }, events },
       inbox: { nextTurn: [], nextStep: [] },
       followup(message) {
         delivered.push(message)

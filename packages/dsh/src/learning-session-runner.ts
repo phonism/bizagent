@@ -1,3 +1,4 @@
+import type {} from './message-source.js'
 import { realpath, stat } from 'node:fs/promises'
 import type { Agent, AgentHandle, AgentOptions, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { freezeMessage, type MessageId } from '@deepseek-ai/dsh-llm'
@@ -303,7 +304,7 @@ export class LearningSessionRunner {
       worker.followup(freezeMessage({
         id: promptId, role: 'user',
         content: [{ type: 'text', text: renderPrompt(current) }],
-        source: { kind: 'plugin', plugin: 'bizagent', form: 'relay' },
+        source: { kind: 'bizagent', form: 'relay' },
       }))
     }
     if (resumedPersisted && wasSent && batch?.status === 'open') {
@@ -312,7 +313,7 @@ export class LearningSessionRunner {
         worker.followup(freezeMessage({
           id: resumeId, role: 'user',
           content: [{ type: 'text', text: renderResumePrompt(current, batch.id) }],
-          source: { kind: 'plugin', plugin: 'bizagent', form: 'relay' },
+          source: { kind: 'bizagent', form: 'relay' },
         }))
       }
     }
@@ -335,7 +336,7 @@ export class LearningSessionRunner {
       if (batch?.status === 'completed') {
         await this.service.ledger.putLearningLaunch({ ...current, status: 'completed', updatedAt: nowIso() })
       } else {
-        const recent = worker.session.events.slice(-6).map(event => event.type).join(', ')
+        const recent = worker.session.snapshotEvents().slice(-6).map(event => event.type).join(', ')
         const pending = worker.inbox.nextTurn.length + worker.inbox.nextStep.length
         await this.markNeedsReview(current,
           `learning Session became idle without a completed batch (recent events: ${recent || 'none'}; pending messages: ${pending})`)
@@ -407,7 +408,7 @@ function renderResumePrompt(launch: LearningLaunch, batchId: string): string {
 }
 
 function hasPrompt(worker: Agent, id: MessageId): boolean {
-  return worker.session.events.some(event => event.type === 'agent/inbox/spliced'
+  return worker.session.snapshotEvents().some(event => event.type === 'agent/inbox/spliced'
     && event.data.inserted.some(item => item.id === id))
     || worker.inbox.nextTurn.some(item => item.id === id)
     || worker.inbox.nextStep.some(item => item.id === id)

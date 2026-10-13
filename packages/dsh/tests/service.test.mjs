@@ -133,6 +133,7 @@ function agent(id, cwd) {
   return {
     id,
     session: {
+      snapshotEvents() { return this.events },
       header: { id, cwd },
       events: [
         { seq: 0, type: 'turn/start', data: { turn: 1 } },
@@ -876,12 +877,10 @@ test('memory use outcomes verify a versioned receipt before a durable Work resul
     { seq: 0, type: 'turn/start', data: { turn: 1 } },
     { seq: 1, type: 'tool/call', data: { turn: 1, callId: 'read-1',
       name: 'bizagent_memory_read', arguments: '{}' } },
-    { seq: 2, type: 'tool/result', data: { message: { content: [
-      { type: 'tool-result', toolCallId: 'read-1' }] } } },
+    { seq: 2, type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'read-1', content: [] } } },
     { seq: 3, type: 'tool/call', data: { turn: 1, callId: 'complete-1',
       name: 'bizagent_work_complete', arguments: '{"work_id":"work-1"}' } },
-    { seq: 4, type: 'tool/result', data: { message: { content: [
-      { type: 'tool-result', toolCallId: 'complete-1' }] } } },
+    { seq: 4, type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'complete-1', content: [] } } },
     { seq: 5, type: 'turn/end', data: { turn: 1 } },
   ]
   const query = { async readSession() { return { session: { id: 'worker-1', cwd: root }, events: structuredClone(events) } } }
@@ -892,7 +891,7 @@ test('memory use outcomes verify a versioned receipt before a durable Work resul
   const service = new BizAgentService(store, ledger, config, query, undefined, undefined,
     { list: () => works })
   await service.initialize()
-  const worker = { id: 'worker-1', session: { header: { id: 'worker-1', cwd: root }, events: events.slice(0, 2) } }
+  const worker = { id: 'worker-1', session: { snapshotEvents() { return this.events }, header: { id: 'worker-1', cwd: root }, events: events.slice(0, 2) } }
   const saved = await service.remember(agent('author', root), 'remember-1', {
     description: 'Compare cohorts', body: 'Compare matching cohorts.' })
   events[1].data.arguments = JSON.stringify({ asset_id: saved.asset.id })
@@ -926,10 +925,10 @@ test('memory use outcomes verify a versioned receipt before a durable Work resul
   await assert.rejects(() => service.memoryUseOutcomes(agent('inspector', root), {
     assetId: saved.asset.id, beforeWorkId: 'missing',
   }), /cursor not found/)
-  events[2].data.message.content[0].isError = true
+  events[2].data.message.isError = true
   const failedRead = await service.memoryUseOutcomes(agent('inspector', root), { assetId: saved.asset.id })
   assert.equal(failedRead.outcomes[0].uses[0].sourceStatus, 'changed')
-  delete events[2].data.message.content[0].isError
+  delete events[2].data.message.isError
   events[1].data.arguments = '{"asset_id":"different"}'
   const changed = await service.memoryUseOutcomes(agent('inspector', root), { assetId: saved.asset.id })
   assert.equal(changed.outcomes[0].uses[0].sourceStatus, 'changed')

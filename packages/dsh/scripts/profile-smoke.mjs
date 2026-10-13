@@ -10,6 +10,7 @@ import { promisify } from 'node:util'
 import { HomeStore } from '../lib/home-store.js'
 import { principalSessionId, projectMainSessionId } from '../lib/agent-session-address.js'
 import { safeHomeId, stableId } from '../lib/domain.js'
+import { prompt as queuePrompt, remote, signIn, startupUrl, webFetch } from './dsh-web.mjs'
 
 const packageRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const root = await mkdtemp(join(await realpath(tmpdir()), 'bizagent-dsh-profile-'))
@@ -25,6 +26,11 @@ const humanInboxId = stableId('inbox', 'personal:default:profile-inbox')
 let lineKnowledgeProposalId
 let commonKnowledgeProposalId
 const modelStages = new Map()
+// Tool results the model received, by tool call id: the smoke's view of what each tool returned.
+const toolResults = new Map()
+const modelErrors = []
+// The signed-in DSH Web browser session of the current DSH process.
+let web
 let modelServer
 let modelPort
 const runtimeCwd = installedConsumer ? resolve(installedConsumer) : pluginAddTarball ? root : packageRoot
@@ -66,42 +72,26 @@ function launch() {
       `DSH exited before ready (${code ?? signal}): ${output}`)))
     const capture = chunk => {
       output = `${output}${chunk.toString()}`.slice(-16000)
-      const url = output.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0]
+      const url = startupUrl(output)
       if (url) { clearTimeout(timer); resolveReady(url) }
     }
     child.stdout.on('data', capture)
     child.stderr.on('data', capture)
   })
-  return { child, ready }
+  return { child, ready, output: () => output }
 }
 
+// DSH 0.2 keeps running when a plugin fails to start; BizAgent must refuse the second writer
+// and leave its routes unregistered in that process.
 async function verifySecondWriterBlocked() {
-  const child = spawn('dsh', ['--profile', 'web', ...(pluginAddTarball ? [] : ['--patch', patch]),
-    '--host', '127.0.0.1', '--port', '0', '--no-open'], {
-    cwd: runtimeCwd,
-    env: { ...process.env, DSH_HOME: root, DSH_TELEMETRY_DISABLED: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  let output = ''
-  child.stdout.on('data', chunk => { output = `${output}${chunk.toString()}`.slice(-16000) })
-  child.stderr.on('data', chunk => { output = `${output}${chunk.toString()}`.slice(-16000) })
-  let timer
+  const second = launch()
   try {
-    const result = await Promise.race([
-      new Promise((resolveExit, rejectExit) => {
-        child.once('error', rejectExit)
-        child.once('exit', (code, signal) => resolveExit({ code, signal }))
-      }),
-      new Promise((_, rejectTimeout) => {
-        timer = setTimeout(() => rejectTimeout(new Error(
-          `second DSH writer did not exit: ${output}`)), 15000)
-      }),
-    ])
-    assert.notEqual(result.code, 0, `second DSH writer unexpectedly started: ${output}`)
-    assert.match(output, /BizAgent writer is already reserved/)
+    const url = await second.ready
+    const secondWeb = await signIn(url)
+    await until(async () => /BizAgent writer is already reserved/.test(second.output()), 'second writer refusal')
+    assert.equal((await webFetch(secondWeb, '/api/bizagent/v1/overview')).status, 404)
   } finally {
-    clearTimeout(timer)
-    await stop(child)
+    await stop(second.child)
   }
 }
 
@@ -123,20 +113,10 @@ function waitForExit(child, ms) {
   })
 }
 
-async function json(base, path, init) {
-  const response = await fetch(`${base}${path}`, { ...init, signal: AbortSignal.timeout(5000) })
+async function json(_base, path, init) {
+  const response = await webFetch(web, path, init)
   if (response.status !== 200) throw new Error(`${path}: ${response.status} ${await response.text()}`)
   return response.json()
-}
-
-async function rpc(base, method, payload) {
-  const rpcId = randomUUID()
-  const response = await json(base, `/api/${method}`, { method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId, method, payload }) })
-  assert.equal(response.rpcId, rpcId)
-  if (!response.result.ok) throw new Error(`${method}: ${JSON.stringify(response.result)}`)
-  return response.result.value
 }
 
 async function until(check, description) {
@@ -148,31 +128,39 @@ async function until(check, description) {
   throw new Error(`timed out waiting for ${description}`)
 }
 
-async function prompt(base, sessionId, marker) {
-  assert.equal((await rpc(base, 'session.prompt', { sessionId, mode: 'queue',
-    content: [{ type: 'text', text: marker }] })).accepted, true)
-  await until(() => (modelStages.get(marker) ?? 0) >= 2, `${marker} model turn`)
+async function prompt(_base, sessionId, marker) {
+  assert.equal((await queuePrompt(web, sessionId, marker)).accepted, true)
+  try {
+    await until(() => (modelStages.get(marker) ?? 0) >= 2, `${marker} model turn`)
+  } catch (error) {
+    const listed = await remote(web, 'session/list', { _request: {} }).catch(cause => ({ items: [], cause: String(cause) }))
+    const summary = listed.items?.find(item => String(item.sessionId) === String(sessionId))
+    const throughSeq = summary?.projections?.asOfSeq
+    const page = throughSeq === undefined ? undefined : await remote(web, 'session/page', { request: {
+      address: { kind: 'session', sessionId }, throughSeq, maxMessages: 40 } }).catch(cause => String(cause))
+    throw new Error(`${error.message}; page: ${JSON.stringify(page).slice(-6000)}; `
+      + `model errors: ${modelErrors.slice(-3).join(' | ')}; `
+      + `DSH output: ${active?.output().slice(-4000)}`)
+  }
 }
 
-async function scopedProposalId(base, sessionId, callId) {
+/** Successful results are the JSON the BizAgent tools render; failures are plain error text. */
+function successfulResults() {
+  return [...toolResults.values()].filter(text => { try { JSON.parse(text); return true } catch { return false } })
+}
+
+async function scopedProposalId(_base, _sessionId, callId) {
   let id
-  await until(async () => {
-    const history = await rpc(base, 'session.history', { sessionId, maxMessages: 100 })
-    const call = history.events.findLast(item => item.event.type === 'tool/call'
-      && String(item.event.data.callId) === callId)
-    id = call === undefined ? undefined : stableId('proposal', `${sessionId}:${call.event.seq}`)
+  await until(() => {
+    try { id = JSON.parse(toolResults.get(callId) ?? 'null')?.proposal?.id } catch { id = undefined }
     return id !== undefined
-  }, `tool call ${callId} in ${sessionId}`)
+  }, `tool call ${callId} result`)
   return id
 }
 
-async function assertToolSucceededContaining(base, sessionId, needle, minimum = 1) {
-  await until(async () => {
-    const history = await rpc(base, 'session.history', { sessionId, maxMessages: 100 })
-    return history.events.filter(item => item.event.type === 'tool/result'
-      && item.event.data.error === undefined
-      && JSON.stringify(item.event.data.message).includes(needle)).length >= minimum
-  }, `successful tool result containing ${needle} in ${sessionId}`)
+async function assertToolSucceededContaining(_base, _sessionId, needle, minimum = 1) {
+  await until(() => successfulResults().filter(text => text.includes(needle)).length >= minimum,
+    `successful tool result containing ${needle}`)
 }
 
 function assertProjectToolSucceeded(base, sessionId, minimum = 1) {
@@ -191,6 +179,10 @@ async function startSmokeModel() {
       let body = ''
       for await (const chunk of req) body += chunk.toString()
       const input = JSON.parse(body)
+      for (const message of input.messages ?? []) {
+        if (message.role === 'tool') toolResults.set(message.tool_call_id, typeof message.content === 'string'
+          ? message.content : JSON.stringify(message.content))
+      }
       const messages = JSON.stringify(input.messages ?? [])
       const titleRequest = input.messages?.some(message => message.role === 'system'
         && String(message.content).includes('Create a concise title'))
@@ -294,7 +286,7 @@ async function startSmokeModel() {
         emit({}, 'stop')
       }
       res.end('data: [DONE]\n\n')
-    } catch (error) { res.writeHead(500).end(String(error)) }
+    } catch (error) { modelErrors.push(String(error).slice(0, 2000)); res.writeHead(500).end(String(error)) }
   })
   modelPort = await new Promise((resolveListen, rejectListen) => {
     modelServer.once('error', rejectListen)
@@ -374,7 +366,8 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
   }
 
   active = launch()
-  let base = await active.ready
+  web = await signIn(await active.ready)
+  let base = web.base
   await verifySecondWriterBlocked()
   const overview = await json(base, '/api/bizagent/v1/overview')
   assert.equal(overview.health.ok, true)
@@ -387,6 +380,8 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       headers: { Authorization: `Bearer ${humanToken}` },
     })
     assert.equal(humanStatus.userId, 'smoke-owner')
+    // The person signed in to DSH Web is the local reviewer without any BizAgent token.
+    assert.equal((await json(base, '/api/bizagent/local-human/status')).userId, 'smoke-owner')
     assert.equal((await fetch(`${base}/api/bizagent/human-inbox`)).status, 401)
     assert.equal((await fetch(`${base}/api/bizagent/human-inbox`, {
       headers: { Authorization: `Bearer ${humanToken}` },
@@ -409,13 +404,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       assert.equal(homePrincipal.sessionId, principalSessionId(address))
       assert.notEqual(homePrincipal.sessionId, principal.sessionId)
       await prompt(base, homePrincipal.sessionId, `SMOKE_${address.split(':')[0].toUpperCase()}_PRINCIPAL`)
-      await until(async () => {
-        const history = await rpc(base, 'session.history', { sessionId: homePrincipal.sessionId,
-          maxMessages: 100 })
-        return history.events.some(item => item.event.type === 'tool/result'
-          && item.event.data.error === undefined
-          && JSON.stringify(item.event.data.message).includes(address))
-      }, `${address} Principal Home status`)
+      await assertToolSucceededContaining(base, homePrincipal.sessionId, address)
     }
     if (modelPort !== undefined) {
       await prompt(base, principal.sessionId, 'SMOKE_CREATE_PROJECT')
@@ -454,9 +443,14 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
     assert.equal(pausedLearning.policy.revision, 1)
     assert.equal(pausedLearning.policy.enabled, false)
   }
-  const client = await fetch(`${base}/plugins/@bizagent/dsh/client.js`, { signal: AbortSignal.timeout(5000) })
+  // DSH Web serves plugin browser bundles as revisioned combo scripts advertised by its page.
+  const page = await (await webFetch(web, '/')).text()
+  const comboPath = [...page.matchAll(/plugins\/\?\?[^"'\s<>]+/g)].map(match => match[0].replaceAll('&amp;', '&'))
+    .find(path => path.includes('@bizagent/dsh/client.js'))
+  assert.ok(comboPath, 'DSH Web page does not load the BizAgent client bundle')
+  const client = await webFetch(web, `/${comboPath}`)
   assert.equal(client.status, 200)
-  assert.ok((await client.text()).length > 1000)
+  assert.match(await client.text(), /bizagent-ui/)
   const created = await json(base, '/api/bizagent/v1/homes', {
     method: 'POST',
     headers: { Origin: base, 'Content-Type': 'application/json' },
@@ -466,7 +460,8 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
 
   await stop(active.child)
   active = launch()
-  base = await active.ready
+  web = await signIn(await active.ready)
+  base = web.base
   const restored = await json(base, '/api/bizagent/v1/overview')
   assert.equal(restored.health.ok, true)
   assert.equal(restored.homes.length, humanToken ? 6 : 2)
@@ -513,7 +508,6 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       await assertToolSucceededContaining(base, roleSessionId, humanInboxId)
       await prompt(base, main.sessionId, 'SMOKE_DISPATCH_WORK')
       await assertToolSucceededContaining(base, main.sessionId, humanWorkId)
-      const workerSessionId = stableId('work-session', humanWorkId)
       try {
         await until(async () => {
           const detail = await json(base,
@@ -523,22 +517,8 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       } catch (error) {
         const detail = await json(base,
           `/api/bizagent/v1/projects/detail?sessionId=${encodeURIComponent(main.sessionId)}&projectId=${humanProjectId}`)
-        const history = await rpc(base, 'session.history', { sessionId: main.sessionId, maxMessages: 100 })
-        const resultText = history.events.filter(item => item.event.type === 'tool/result').at(-1)
-          ?.event.data.message.content?.[0]?.content?.[0]?.text
-        const dispatch = resultText === undefined ? undefined : JSON.parse(resultText)
-        const workerHistory = await rpc(base, 'session.history', { sessionId: workerSessionId,
-          maxMessages: 100 })
-        const workerResults = workerHistory.events.filter(item => item.event.type === 'tool/result')
-          .map(item => ({ error: item.event.data.error,
-            text: item.event.data.message.content?.[0]?.content?.[0]?.text?.slice(0, 900) }))
-        const workerEvents = workerHistory.events.slice(-14).map(item => ({ type: item.event.type,
-          data: JSON.stringify(item.event.data).slice(0, 300) }))
-        const workerSummary = (await rpc(base, 'session.list', {})).items
-          .find(item => item.sessionId === workerSessionId)
         throw new Error(`${error}; work=${JSON.stringify(detail.work)}; stages=${JSON.stringify([...modelStages])}; `
-          + `workerLaunch=${JSON.stringify(dispatch?.workerLaunch)}; workerResults=${JSON.stringify(workerResults)}; `
-          + `workerSummary=${JSON.stringify({ running: workerSummary?.running })}; workerEvents=${JSON.stringify(workerEvents).slice(0, 5000)}`)
+          + `toolResults=${JSON.stringify([...toolResults]).slice(0, 5000)}`)
       }
       await prompt(base, main.sessionId, 'SMOKE_SUBMIT_PROJECT')
       await assertProjectToolSucceeded(base, main.sessionId, 4)
@@ -597,7 +577,8 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
   const stale = JSON.parse(await readFile(join(root, '.bizagent-writer.lock'), 'utf8'))
   assert.equal(stale.pid, crashed.pid)
   active = launch()
-  base = await active.ready
+  web = await signIn(await active.ready)
+  base = web.base
   const recovered = await json(base, '/api/bizagent/v1/overview')
   assert.equal(recovered.health.ok, true)
   assert.equal(recovered.homes.length, humanToken ? 6 : 2)

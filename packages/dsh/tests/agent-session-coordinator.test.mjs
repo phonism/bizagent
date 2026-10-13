@@ -23,14 +23,14 @@ test('one Principal and a separate Project Main reuse the lead Home after restar
     create: async ({ sessionId, meta, agentOptions }) => {
       starts.push({ kind: 'create', sessionId, cwd: meta.cwd, agentOptions })
       records.set(sessionId, { header: { id: sessionId, cwd: meta.cwd }, persisted: true })
-      const agent = { id: sessionId, session: { header: { id: sessionId, cwd: meta.cwd } } }
+      const agent = { id: sessionId, session: { snapshotEvents() { return this.events }, header: { id: sessionId, cwd: meta.cwd } } }
       live.set(sessionId, agent)
       return { agent, dispose: async () => { live.delete(sessionId) } }
     },
     resume: async ({ resumeSessionId, agentOptions }) => {
       starts.push({ kind: 'resume', sessionId: resumeSessionId, cwd: workspace, agentOptions })
       const agent = { id: resumeSessionId,
-        session: { header: records.get(resumeSessionId).header } }
+        session: { snapshotEvents() { return this.events }, header: records.get(resumeSessionId).header } }
       live.set(resumeSessionId, agent)
       return { agent, dispose: async () => { live.delete(resumeSessionId) } }
     },

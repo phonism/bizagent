@@ -12,7 +12,7 @@ import {
   nowIso,
   parseHomeAddress,
 } from './domain.js'
-import { rejectUntrustedRequest } from './route-guard.js'
+import { dshOperatorAuthentication, rejectUntrustedRequest, type OperatorAuthentication } from './route-guard.js'
 import { renderRuntimeIssue, type BizAgentService } from './service.js'
 import {
   BIZAGENT_UI_API,
@@ -242,6 +242,10 @@ export function apply(ctx: Context, _config: Config = {}): void {
       + 'serving them on other interfaces is unsupported')
   }
   const facade = new BizAgentUiFacade(ctx.bizagent)
+  // Every UI route also requires DSH's browser login when the host has one, so other local
+  // processes (including an Agent's shell) cannot read or change Homes through this API.
+  const route = (req: IncomingMessage, res: ServerResponse, method: 'GET' | 'POST',
+    execute: () => unknown | Promise<unknown>) => guardedRoute(req, res, method, execute, dshOperatorAuthentication(ctx))
   const directorySession = async (req: IncomingMessage) => {
     const url = new URL(req.url ?? '', 'http://bizagent.local')
     const input = AgentDirectoryQuerySchema.parse({
@@ -255,7 +259,7 @@ export function apply(ctx: Context, _config: Config = {}): void {
       if (String(live.id) !== input.sessionId) {
         throw new UiRequestError('session-unavailable', 'Session is unavailable for Agent directory lookup.')
       }
-      return { input, cwd: live.session.header.cwd, events: live.session.events }
+      return { input, cwd: live.session.header.cwd, events: live.session.snapshotEvents() }
     }
     let snapshot: Awaited<ReturnType<typeof ctx.sessionQuery.readSession>>
     try { snapshot = await ctx.sessionQuery.readSession(input.sessionId as SessionId) }
@@ -387,14 +391,22 @@ class UiRequestError extends Error {
   }
 }
 
-async function route(
+async function guardedRoute(
   req: IncomingMessage,
   res: ServerResponse,
   method: 'GET' | 'POST',
   execute: () => unknown | Promise<unknown>,
+  operator: OperatorAuthentication | undefined,
 ): Promise<void> {
   setCommonHeaders(res)
   if (rejectUntrustedRequest(req, res)) return
+  const rejection = operator?.requestRejection(req)
+  if (rejection !== undefined) {
+    writeJson(res, rejection, { error: rejection === 401
+      ? { code: 'authentication-required', message: 'Open DSH Web from the URL it printed, then retry.' }
+      : { code: 'forbidden', message: 'This request is not accepted from this origin.' } })
+    return
+  }
   if (req.method !== method) {
     res.setHeader('Allow', method)
     writeJson(res, 405, { error: { code: 'method-not-allowed', message: `Use ${method} for this endpoint.` } })

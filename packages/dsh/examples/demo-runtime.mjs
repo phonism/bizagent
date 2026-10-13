@@ -60,7 +60,12 @@ export async function createDemoRuntime() {
         { seq: 1, time: 2, type: 'user/message', data: { content: [{ type: 'text', text: message }] } },
       ]
       sessions.set(id, { session: { id, cwd }, events })
-      return { id, session: { header: { id, cwd }, events } }
+      return { id, session: liveSession({ id, cwd }, events) }
     },
   }
+}
+
+/** The part of a live DSH Session the plugin reads: its header and a snapshot of its event log. */
+export function liveSession(header, events) {
+  return { header, events, snapshotEvents: () => events }
 }

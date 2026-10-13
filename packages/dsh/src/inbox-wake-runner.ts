@@ -1,3 +1,4 @@
+import type {} from './message-source.js'
 import { realpath, stat } from 'node:fs/promises'
 import type { AgentHandle, AgentOptions, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { freezeMessage, type MessageId } from '@deepseek-ai/dsh-llm'
@@ -323,7 +324,7 @@ export class InboxWakeRunner {
       throw new Error('Inbox wake Session identity or Workspace differs from plan')
     }
     const promptId = stableId('inbox-prompt', plan.id) as MessageId
-    const alreadySent = agent.session.events.some(event => event.type === 'agent/inbox/spliced'
+    const alreadySent = agent.session.snapshotEvents().some(event => event.type === 'agent/inbox/spliced'
       && event.data.inserted.some(message => message.id === promptId))
       || agent.inbox.nextTurn.some(message => message.id === promptId)
       || agent.inbox.nextStep.some(message => message.id === promptId)
@@ -331,7 +332,7 @@ export class InboxWakeRunner {
       agent.followup(freezeMessage({
         id: promptId, role: 'user',
         content: [{ type: 'text', text: renderPrompt(plan, pendingIds, this.service) }],
-        source: { kind: 'plugin', plugin: 'bizagent', form: 'relay' },
+        source: { kind: 'bizagent', form: 'relay' },
       }))
     }
     await this.service.ledger.markInboxWakeDispatched(plan.id, nowIso())

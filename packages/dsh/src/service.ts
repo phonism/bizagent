@@ -1,3 +1,4 @@
+import type {} from './message-source.js'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { lstat, realpath, stat } from 'node:fs/promises'
@@ -400,7 +401,7 @@ export class BizAgentService {
         }
         return { worklog: existing, idempotentReplay: true }
       }
-      const events = [...agent.session.events]
+      const events = [...agent.session.snapshotEvents()]
       if (events.length === 0) throw new Error('Worklog requires durable Session evidence')
       const cwd = agent.session.header.cwd
       if (filePaths.length > 0 && cwd === undefined) throw new Error('Worklog files require a Session Workspace')
@@ -1190,7 +1191,7 @@ export class BizAgentService {
   }
 
   private async recordProjectTurn(agent: Agent, binding: SessionBinding, projectId: string) {
-    const events = agent.session.events
+    const events = agent.session.snapshotEvents()
     const start = [...events].reverse().find(event => event.type === 'turn/start')
     if (start?.type !== 'turn/start'
       || events.some(event => event.type === 'turn/end' && event.data.turn === start.data.turn)) {
@@ -2646,7 +2647,7 @@ export class BizAgentService {
 
   async frameStatus(agent: Agent): Promise<FrameStatusSnapshot> {
     const binding = await this.requireDurableBinding(agent)
-    return this.frameStatusSnapshot(String(agent.id), binding.homeAddress, agent.session.events)
+    return this.frameStatusSnapshot(String(agent.id), binding.homeAddress, agent.session.snapshotEvents())
   }
 
   async frameStatusForSession(sessionId: string, cwd: string | undefined,
@@ -2699,7 +2700,7 @@ export class BizAgentService {
     if (!['lead', 'contribute', 'reference'].includes(mode)) throw new Error(`unknown Frame mode: ${mode}`)
     let context = ''
     let status: 'opened' | 'delta' | 'unchanged' = 'opened'
-    const latestCompactionSeq = latestSuccessfulCompactionSeq(agent.session.events)
+    const latestCompactionSeq = latestSuccessfulCompactionSeq(agent.session.snapshotEvents())
     const state = await this.ledger.updateFrameState(String(agent.id), (current) => {
       const previous = this.checkedFrameState(current, String(agent.id), binding.homeAddress)
       const targetHome = this.requireReadableFrameHome(binding.homeAddress, targetAddress)
@@ -3380,7 +3381,7 @@ export class BizAgentService {
 
     let match: ReturnType<LearningTrigger['detect']> = undefined
     for (const trigger of this.learningTriggers) {
-      match = trigger.detect(agent.session.events, turn)
+      match = trigger.detect(agent.session.snapshotEvents(), turn)
       if (match !== undefined) break
     }
     if (match === undefined) return undefined
@@ -3713,7 +3714,7 @@ export class BizAgentService {
     signal: FitnessSignal,
     outcome?: string,
   ): FitnessReceipt {
-    const eventSeq = agent.session.events.at(-1)?.seq
+    const eventSeq = agent.session.snapshotEvents().at(-1)?.seq
     return {
       id: stableId('receipt', `${callScope(agent, callId)}:${signal}:${asset.id}`),
       assetId: asset.id,
@@ -3825,7 +3826,7 @@ export class BizAgentService {
 }
 
 function currentEvidence(agent: Agent): EvidenceRef {
-  const events = agent.session.events
+  const events = agent.session.snapshotEvents()
   if (events.length === 0) throw new Error('cannot create long-term learning without a durable session event')
   let turnStart = 0
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -3885,7 +3886,7 @@ function fitnessDelta(signal: FitnessSignal): number {
  * call's durable `tool/call` event; the call ID stands in only when no such event is visible.
  */
 function callScope(agent: Agent, callId: string): string {
-  const events = agent.session.events
+  const events = agent.session.snapshotEvents()
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index]!
     if (event.type === 'tool/call' && String(event.data.callId) === callId) return `${String(agent.id)}:${event.seq}`
@@ -4010,8 +4011,7 @@ function successfulToolResult(events: readonly SessionEvent[], callId: string,
   afterSeq: number, beforeSeq = Number.POSITIVE_INFINITY): boolean {
   return events.some(event => event.type === 'tool/result' && event.seq > afterSeq
     && event.seq < beforeSeq && event.data.error === undefined
-    && event.data.message.content.some(block => block.type === 'tool-result'
-      && String(block.toolCallId) === callId && block.isError !== true))
+    && String(event.data.message.toolCallId) === callId && event.data.message.isError !== true)
 }
 
 function completedWorkTurn(events: readonly SessionEvent[], workId: string): SessionEvent[] | undefined {
@@ -4026,8 +4026,7 @@ function completedWorkTurn(events: readonly SessionEvent[], workId: string): Ses
       } catch { /* An invalid call cannot prove a completed Work turn. */ }
     }
     if (event.type !== 'tool/result') continue
-    const callId = event.data.message.content.find(block => block.type === 'tool-result')?.toolCallId
-    const call = callId === undefined ? undefined : calls.get(String(callId))
+    const call = calls.get(String(event.data.message.toolCallId))
     if (call === undefined) continue
     const start = events.findIndex((candidate, position) => position <= call.index
       && candidate.type === 'turn/start' && candidate.data.turn === call.turn)
@@ -4086,7 +4085,7 @@ function turnEvidence(events: readonly SessionEvent[]): TurnEvidence {
     if (event.type === 'user/message') {
       const source = event.data.source
       const authored = source?.kind === 'user'
-        || (source?.kind === 'plugin' && source.plugin === 'bizagent' && source.form === 'relay')
+        || (source?.kind === 'bizagent' && source.form === 'relay')
       if (authored || (source === undefined && !authoredUserText)) {
         userText = event.data.content.filter(block => block.type === 'text')
           .map(block => block.text).join('\n')
@@ -4106,8 +4105,8 @@ function turnEvidence(events: readonly SessionEvent[]): TurnEvidence {
         toolActions.push({ name: event.data.name.slice(0, 120), outcome: 'unknown' })
       }
     } else if (event.type === 'tool/result') {
-      const callId = String(event.data.message.content[0]?.toolCallId ?? '')
-      const failed = event.data.error !== undefined || event.data.message.content[0]?.isError === true
+      const callId = String(event.data.message.toolCallId)
+      const failed = event.data.error !== undefined || event.data.message.isError === true
       const actionIndex = actionIndexes.get(callId)
       if (actionIndex !== undefined) toolActions[actionIndex]!.outcome = failed ? 'failed' : 'succeeded'
       if (failed) {

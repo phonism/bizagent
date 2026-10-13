@@ -1,3 +1,4 @@
+import type {} from './message-source.js'
 import { realpath, stat } from 'node:fs/promises'
 import type { Agent, AgentHandle, AgentOptions, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { freezeMessage, type MessageId } from '@deepseek-ai/dsh-llm'
@@ -269,7 +270,7 @@ export class WorkRunner {
       throw error
     }
     const promptId = stableId('work-prompt', work.id) as MessageId
-    const wasSent = worker.session.events.some(event => event.type === 'agent/inbox/spliced'
+    const wasSent = worker.session.snapshotEvents().some(event => event.type === 'agent/inbox/spliced'
       && event.data.inserted.some(message => message.id === promptId))
       || worker.inbox.nextTurn.some(message => message.id === promptId)
       || worker.inbox.nextStep.some(message => message.id === promptId)
@@ -278,7 +279,7 @@ export class WorkRunner {
         id: promptId,
         role: 'user',
         content: [{ type: 'text', text: renderWorkPrompt(work) }],
-        source: { kind: 'plugin', plugin: 'bizagent', form: 'relay' },
+        source: { kind: 'bizagent', form: 'relay' },
       }))
     }
     return {

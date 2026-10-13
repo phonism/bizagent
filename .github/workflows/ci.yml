@@ -36,3 +36,27 @@ jobs:
       - run: npm run smoke
       - run: node examples/learning-lab.mjs
       - run: npm run pack:check
+
+  # Load the plugin into a real DSH CLI: install the packed tarball with `dsh plugin add`, then
+  # run headless Agents against a local fake model. Pinned to the DSH release the package targets.
+  dsh-runtime:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/dsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/dsh/package-lock.json
+      - run: npm ci
+      - run: npm install --global @deepseek-ai/dsh@0.2.0-rc.2
+      - run: dsh --version
+      - run: npm run smoke:plugin-add
+      - run: npm run smoke:local-human
+      - run: npm run smoke:agent
+      - run: npm run smoke:work
+      - run: npm run smoke:project
+      - run: npm run smoke:learning

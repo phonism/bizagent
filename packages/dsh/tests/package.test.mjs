@@ -7,12 +7,15 @@ test('published package declares an installable DSH bundle', async () => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
   assert.equal(manifest.name, '@bizagent/dsh')
   assert.equal(manifest.version, '0.1.0-alpha.2')
-  assert.equal(manifest.peerDependencies['@deepseek-ai/cordis'], '4.0.1')
-  assert.equal(manifest.dependencies['@deepseek-ai/schemastery'], '3.18.1')
+  assert.equal(manifest.peerDependencies['@deepseek-ai/cordis'], '~4.0.4')
+  assert.equal(manifest.dependencies['@deepseek-ai/schemastery'], '3.18.4')
   assert.equal(manifest.dependencies.yaml, '2.9.0')
   assert.equal(manifest.dependencies.zod, '4.5.2')
-  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-session-query'], '^0.1.1-rc.2')
-  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-client-ui-conversation'], '^0.1.1-rc.2')
+  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-session-query'], '^0.2.0-rc.2')
+  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-client-ui-conversation'], '^0.2.0-rc.2')
+  for (const [name, range] of Object.entries(manifest.peerDependencies)) {
+    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(range, '^0.2.0-rc.2', name)
+  }
   assert.ok(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-conversation'))
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(manifest.dsh.client.platform, 'web')
@@ -59,7 +62,7 @@ test('published package declares an installable DSH bundle', async () => {
   })
   assert.equal(clientExports.name, 'bizagent-ui')
   assert.equal(typeof clientExports.apply, 'function')
-  assert.deepEqual([...clientExports.inject], ['slots', 'locale', 'inputTriggers', 'sessions', 'workspaces'])
+  assert.deepEqual([...clientExports.inject], ['slots', 'locale', 'inputTriggers', 'sessions', 'workspaces', 'uiWorkspace'])
   const entries = []
   const calls = []
   clientExports.apply({
@@ -72,11 +75,12 @@ test('published package declares an installable DSH bundle', async () => {
       async create({ path }) { calls.push(['create', path]); return { workspaceId: 'workspace-alice' } },
       async insertSessionBefore(workspaceId, sessionId) { calls.push(['insert', workspaceId, sessionId]) },
     },
-    sessions: { open(id) { calls.push(['open', id]) } },
+    sessions: { async refresh() { calls.push(['refresh']) } },
+    uiWorkspace: { openSession(id) { calls.push(['open', id]) } },
   })
   const dashboard = entries.find(entry => entry.name === 'shell.overlay')
   assert.ok(dashboard)
   await dashboard.inject().openAgentSession({ homeAddress: 'personal:alice' })
   assert.deepEqual(calls, [['create', '/tmp/alice'],
-    ['insert', 'workspace-alice', 'session-principal'], ['open', 'session-principal']])
+    ['insert', 'workspace-alice', 'session-principal'], ['refresh'], ['open', 'session-principal']])
 })

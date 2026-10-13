@@ -27,6 +27,7 @@ import { loadActiveOrganizationLocation, type ActiveOrganizationLocation } from 
 import { RuntimeWriterGuard } from './writer-guard.js'
 import { registerTools } from './tools.js'
 import { inlineText } from './untrusted-text.js'
+import './message-source.js'
 
 export const name = 'bizagent'
 export const inject = ['tools', 'systemPrompt', 'storageDomain', 'sessionQuery', 'agents', 'agentDefaultModel']
@@ -131,11 +132,10 @@ async function applyLocked(ctx: Context, config: ResolvedConfig,
 
   // Every Session this plugin creates or resumes joins a DSH agent preset, so it gets the same
   // built-in tools as a Session the user opens in DSH.
-  const sessionAgents = withAgentPreset(ctx, ctx.agents, ctx.sessionQuery)
-  const workRunner = new WorkRunner(sessionAgents, ctx.sessionQuery, service, config,
-    () => { const { provider, model } = ctx.agentDefaultModel.currentSelection(); return { provider, model } })
-  const agentSessions = new AgentSessionCoordinator(sessionAgents, ctx.sessionQuery, service,
-    () => { const { provider, model } = ctx.agentDefaultModel.currentSelection(); return { provider, model } })
+  const defaultModel = () => { const { provider, model } = ctx.agentDefaultModel.currentSelection(); return { provider, model } }
+  const sessionAgents = withAgentPreset(ctx, ctx.agents, ctx.sessionQuery, defaultModel)
+  const workRunner = new WorkRunner(sessionAgents, ctx.sessionQuery, service, config, defaultModel)
+  const agentSessions = new AgentSessionCoordinator(sessionAgents, ctx.sessionQuery, service, defaultModel)
   service.projectMainProvisioner = async projectId => {
     const opened = await agentSessions.openProjectMain(projectId)
     return { sessionId: opened.sessionId }
@@ -172,31 +172,38 @@ async function applyLocked(ctx: Context, config: ResolvedConfig,
     order: 80,
     text: LEARNING_POLICY,
   })
-  ctx.on('agent/session-start', ({ agent }) => {
-    const snapshot = service.contextSnapshotForSession(String(agent.id), agent.session.header.cwd)
-    if (snapshot !== undefined && !hasCurrentSnapshot(agent.session.events, snapshot)) {
-      const text = renderHomeSnapshot(snapshot)
-      agent.inject(createUserMessage({
-        content: [{ type: 'text', text }],
-        source: {
-          kind: 'plugin',
-          plugin: 'bizagent',
-          form: 'snapshot',
-          sections: [{ name: 'home-context', text }],
-        },
-      }))
+  // DSH awaits these listeners before a Session exists and fails creation on a throw, so a
+  // BizAgent fault must never escape: the Session simply starts without the extra context.
+  ctx.on('agent/created', ({ agent }) => {
+    try {
+      const events = agent.session.snapshotEvents()
+      const snapshot = service.contextSnapshotForSession(String(agent.id), agent.session.header.cwd)
+      if (snapshot !== undefined && !hasCurrentSnapshot(events, snapshot)) {
+        const text = renderHomeSnapshot(snapshot)
+        agent.inject(createUserMessage({
+          content: [{ type: 'text', text }],
+          source: {
+            kind: 'bizagent',
+            form: 'snapshot',
+            sections: [{ name: 'home-context', text }],
+          },
+        }))
+      }
+      const wakeOrigin = ledger.getInboxWakeOrigin(String(agent.id))
+      const ordinaryWake = wakeOrigin !== undefined && ledger.getInboxWakePlan(wakeOrigin.wakePlanId) !== undefined
+      const inbox = ordinaryWake ? undefined
+        : service.pendingInboxDigestForSession(String(agent.id), agent.session.header.cwd)
+      if (inbox !== undefined && !hasCurrentInboxDigest(events, inbox.digest)) {
+        const text = renderInboxDigest(inbox)
+        agent.inject(createUserMessage({
+          content: [{ type: 'text', text }],
+          source: { kind: 'bizagent', form: 'notice', summary: 'Pending Inbox messages.' },
+        }))
+      }
+    } catch (error) {
+      service.recordRuntimeError(`Session start context ${String(agent.id)}`, error)
     }
-    const wakeOrigin = ledger.getInboxWakeOrigin(String(agent.id))
-    const ordinaryWake = wakeOrigin !== undefined && ledger.getInboxWakePlan(wakeOrigin.wakePlanId) !== undefined
-    const inbox = ordinaryWake ? undefined
-      : service.pendingInboxDigestForSession(String(agent.id), agent.session.header.cwd)
-    if (inbox !== undefined && !hasCurrentInboxDigest(agent.session.events, inbox.digest)) {
-      const text = renderInboxDigest(inbox)
-      agent.inject(createUserMessage({
-        content: [{ type: 'text', text }],
-        source: { kind: 'plugin', plugin: 'bizagent', form: 'notice', summary: 'Pending Inbox messages.' },
-      }))
-    }
+    return undefined
   })
 
   ctx.on('agent/turn-stopping', async ({ agent, turn }) => {
@@ -207,8 +214,7 @@ async function applyLocked(ctx: Context, config: ResolvedConfig,
         agent.steer(createUserMessage({
           content: [{ type: 'text', text: renderCheckpointPrompt(checkpoint) }],
           source: {
-            kind: 'plugin',
-            plugin: 'bizagent',
+            kind: 'bizagent',
             form: 'notice',
             summary: 'Review an explicit correction for durable memory.',
           },
@@ -421,7 +427,7 @@ function hasCurrentSnapshot(events: readonly SessionEvent[], snapshot: HomeSnaps
   ]
   return visible.some((event) => {
     if (event.type !== 'user/message') return false
-    if (event.data.source.kind !== 'plugin' || event.data.source.plugin !== 'bizagent') return false
+    if (event.data.source.kind !== 'bizagent') return false
     const text = event.data.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n')
     return identity.every(line => text.includes(line))
   })
@@ -441,7 +447,7 @@ function visibleEvents(events: readonly SessionEvent[]): readonly SessionEvent[]
 function hasCurrentInboxDigest(events: readonly SessionEvent[], digest: string): boolean {
   return visibleEvents(events).some((event) => {
     if (event.type !== 'user/message') return false
-    if (event.data.source.kind !== 'plugin' || event.data.source.plugin !== 'bizagent') return false
+    if (event.data.source.kind !== 'bizagent') return false
     const text = event.data.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n')
     return text.includes(INBOX_DIGEST_MARKER) && text.includes(`Digest: ${digest}`)
   })

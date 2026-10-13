@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Context } from '@deepseek-ai/cordis'
 
 /**
  * Browser-trust fence for every HTTP route this plugin registers on the local DSH web server.
@@ -82,4 +83,20 @@ function parseAuthority(authority: string): URL | undefined {
   } catch {
     return undefined
   }
+}
+
+/** DSH Web's own browser login (the cookie minted from the URL `dsh web` prints). */
+export interface OperatorAuthentication {
+  /** 401 or 403 when the request lacks DSH's browser login; undefined when it may proceed. */
+  requestRejection(request: Pick<IncomingMessage, 'headers'>): 401 | 403 | undefined
+}
+
+/**
+ * DSH's browser login, looked up per request. DSH 0.2 Web provides it as the `connection`
+ * service; hosts without it get only the loopback fence above.
+ */
+export function dshOperatorAuthentication(ctx: Context): OperatorAuthentication | undefined {
+  const candidate = (ctx as unknown as { get(name: string): unknown }).get('connection') as
+    Partial<OperatorAuthentication> | undefined
+  return typeof candidate?.requestRejection === 'function' ? candidate as OperatorAuthentication : undefined
 }
