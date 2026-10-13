@@ -466,3 +466,18 @@ test('Work dispatch tool reports that no worker starts for an assignee Home with
   assert.equal(provided.get('bizagent').ledger.getInboxDelivery(result.work.requestMessageId, 'role:reviewer').status,
     'delivered')
 })
+
+test('the public entry points stay small and deliberate', async () => {
+  const main = await import('../lib/index.js')
+  assert.deepEqual(Object.keys(main).sort(), ['Config', 'apply', 'inject', 'name'])
+  const host = await import('../lib/host.js')
+  assert.deepEqual(Object.keys(host).sort(), [
+    'BIZAGENT_PROJECT_REVIEW_API', 'BIZAGENT_PROPOSAL_REVIEW_API', 'HUMAN_INBOX_API',
+    'HumanNotificationRunner', 'HumanNotificationWebhook', 'HumanTurnCompletionNotifier',
+    'InboxStalledEscalationRunner', 'SHARED_KNOWLEDGE_REVIEW_API', 'createHumanInboxHttpHandler',
+    'createProjectReviewHttpHandler', 'createProposalReviewHttpHandler',
+    'createSharedKnowledgeReviewHttpHandler', 'exportHomeArchive', 'importHomeArchive',
+    'registerHumanInboxRoute', 'registerProjectReviewRoute', 'registerProposalReviewRoute',
+    'registerSharedKnowledgeReviewRoute', 'stalledInboxTopics', 'verifyHomeArchive',
+  ])
+})

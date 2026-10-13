@@ -38,7 +38,7 @@ try {
     dependencies, overrides }
   await writeFile(join(consumer, 'package.json'), `${JSON.stringify(host, null, 2)}\n`)
   await run('npm', ['install', '--no-audit', '--no-fund'], { cwd: consumer })
-  const resolved = await run('node', ['-e', "import('@bizagent/dsh').then(m => { if (!m.BizAgentService) process.exit(2) })"],
+  const resolved = await run('node', ['-e', "import('@bizagent/dsh').then(m => { if (typeof m.apply !== 'function') process.exit(2) })"],
     { cwd: consumer })
   assert.equal(resolved.stderr, '')
   if (process.argv.includes('--install-only')) {

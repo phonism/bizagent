@@ -19,6 +19,10 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./host": {
+      "types": "./lib/host.d.ts",
+      "default": "./lib/host.js"
+    },
     "./ui-host": {
       "types": "./lib/ui-host.d.ts",
       "default": "./lib/ui-host.js"
