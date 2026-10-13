@@ -1,6 +1,7 @@
 import type {} from './message-source.js'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import { lstat, realpath, stat } from 'node:fs/promises'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
@@ -182,6 +183,23 @@ export class BizAgentService {
 
   getActiveOrganizationLocation(): ActiveOrganizationLocation | undefined {
     return this.activeOrganization === undefined ? undefined : structuredClone(this.activeOrganization)
+  }
+
+  /**
+   * Where this Home's own Sessions run when BizAgent starts one (formal Work, Inbox wake): the host's
+   * explicit workspaceHomes mapping, else the active Home's own directory. Undefined when neither
+   * exists. The Home directory is the same Workspace its Principal and Project Main use.
+   */
+  homeWorkspaceRoot(home: HomeAddress): string | undefined {
+    const mapped = this.config.workspaceHomes.find(mapping => mapping.address === home)
+    if (mapped !== undefined) return mapped.root
+    const record = this.store.findHome(home)
+    if (record === undefined || record.status !== 'active') return undefined
+    try {
+      return realpathSync.native(this.store.homeWorkspacePath(home))
+    } catch {
+      return undefined
+    }
   }
 
   /** A known Workspace whose new Sessions resolve to this active Business Home. */
@@ -2298,7 +2316,7 @@ export class BizAgentService {
    * assignee's own Sessions.
    */
   workAutoStartBlock(requester: HomeAddress, assignee: HomeAddress): 'no-workspace-mapping' | 'different-owner' | undefined {
-    if (!this.config.workspaceHomes.some(mapping => mapping.address === assignee)) return 'no-workspace-mapping'
+    if (this.homeWorkspaceRoot(assignee) === undefined) return 'no-workspace-mapping'
     return this.sameHomeOwner(requester, assignee) ? undefined : 'different-owner'
   }
 

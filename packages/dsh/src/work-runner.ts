@@ -181,11 +181,11 @@ export class WorkRunner {
       throw new Error('Work worker start requires requester and assignee Homes with the same owner; '
         + 'the assignee handles this Work from its own Sessions')
     }
-    const mapping = this.config.workspaceHomes.find(item => item.address === work.assignee)
-    if (mapping === undefined) throw new Error(`no DSH Workspace is mapped to Work assignee ${work.assignee}`)
-    const info = await stat(mapping.root)
-    if (!info.isDirectory() || await realpath(mapping.root) !== mapping.root) {
-      throw new Error(`Work assignee Workspace is not a real directory: ${mapping.root}`)
+    const root = this.service.homeWorkspaceRoot(work.assignee)
+    if (root === undefined) throw new Error(`no DSH Workspace is available for Work assignee ${work.assignee}`)
+    const info = await stat(root)
+    if (!info.isDirectory() || await realpath(root) !== root) {
+      throw new Error(`Work assignee Workspace is not a real directory: ${root}`)
     }
     const sessionId = stableId('work-session', work.id) as SessionId
     const reserved = await ledger.withWrite(async () => {
@@ -197,13 +197,13 @@ export class WorkRunner {
       if (current.workerSessionId !== undefined && current.workerSessionId !== sessionId) {
         throw new Error('Work belongs to another worker Session')
       }
-      if (current.workerCwd !== undefined && current.workerCwd !== mapping.root) {
+      if (current.workerCwd !== undefined && current.workerCwd !== root) {
         throw new Error('Work worker Workspace changed after its first start')
       }
       if (current.workerSessionId !== undefined) return current
       const model = current.workerOptions ?? this.defaultModel?.()
       const next: FormalWork = {
-        ...current, workerSessionId: sessionId, workerCwd: mapping.root,
+        ...current, workerSessionId: sessionId, workerCwd: root,
         ...(model === undefined ? {} : { workerOptions: model }), updatedAt: nowIso(),
       }
       await ledger.put(next)
@@ -211,11 +211,11 @@ export class WorkRunner {
     })
     const existingBinding = this.service.ledger.getBinding(sessionId)
     if (existingBinding !== undefined && (existingBinding.homeAddress !== reserved.assignee
-      || existingBinding.cwd !== mapping.root)) {
+      || existingBinding.cwd !== root)) {
       throw new Error('Work worker Session binding conflicts with the reserved Home or Workspace')
     }
     await this.service.ledger.putBinding({
-      sessionId, homeAddress: reserved.assignee, cwd: mapping.root, boundAt: existingBinding?.boundAt ?? nowIso(),
+      sessionId, homeAddress: reserved.assignee, cwd: root, boundAt: existingBinding?.boundAt ?? nowIso(),
     })
     await this.service.ledger.putInboxWakeOrigin({
       schemaVersion: 1, sessionId, homeAddress: reserved.assignee,
@@ -243,7 +243,7 @@ export class WorkRunner {
       }
       handle = record === undefined
         ? await this.agents.create({
-          sessionId, meta: { cwd: mapping.root },
+          sessionId, meta: { cwd: root },
           ...(agentOptions !== undefined ? { agentOptions } : {}),
         })
         : await this.agents.resume({
@@ -255,7 +255,7 @@ export class WorkRunner {
       source = record === undefined ? 'created' : 'resumed'
     }
     try {
-      if (worker.session.header.cwd !== mapping.root) {
+      if (worker.session.header.cwd !== root) {
         throw new Error('Work worker Session Workspace differs from its reserved mapping')
       }
       // Project participation is recorded from an active turn. A newly created

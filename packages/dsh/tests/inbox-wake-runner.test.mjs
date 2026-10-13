@@ -283,15 +283,16 @@ test('a wake plan that can never start as planned is retired instead of retried 
   await transient.close()
   await planner.close()
   // The Home's Workspace mapping then moves: that plan can never start in its recorded Workspace.
-  const moved = new InboxWakeRunner(agents, runtime.sessionQuery, service,
-    { ...config, workspaceHomes: [{ root: movedCwd, address: 'role:reviewer' }] })
+  const movedConfig = { ...config, workspaceHomes: [{ root: movedCwd, address: 'role:reviewer' }] }
+  const movedService = new BizAgentService(service.store, runtime.ledger, movedConfig, runtime.sessionQuery)
+  const moved = new InboxWakeRunner(agents, runtime.sessionQuery, movedService, movedConfig)
   const pass = await moved.recoverBatch(1, now)
   assert.deepEqual(pass.failed, [])
   assert.deepEqual(pass.skipped, [planId])
   const plan = service.ledger.getInboxWakePlan(planId)
   assert.ok(plan.dispatchedAt)
   assert.match(plan.retiredReason, /Workspace mapping changed/)
-  assert.ok(service.listRuntimeIssues().some(issue => issue.message.startsWith(`Inbox wake ${planId} retired`)))
+  assert.ok(movedService.listRuntimeIssues().some(issue => issue.message.startsWith(`Inbox wake ${planId} retired`)))
   await moved.close()
 })
 

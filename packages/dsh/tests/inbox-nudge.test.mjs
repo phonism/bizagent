@@ -18,7 +18,8 @@ async function setup(t) {
   await store.initialize()
   const aliceHome = await store.createHome({ address: 'personal:alice', owner: 'alice' })
   const recipientHome = await store.createHome({ address: 'role:recipient', owner: 'alice' })
-  await store.createHome({ address: 'role:other', owner: 'alice' })
+  // Another person's Home: mail to it never starts a Session in this owner's runtime.
+  await store.createHome({ address: 'role:other', owner: 'bob' })
   for (const home of [aliceHome, recipientHome]) {
     await writeFile(join(store.homesRoot, home.id, 'inbox.json'), JSON.stringify({ policy: 'carried' }))
   }

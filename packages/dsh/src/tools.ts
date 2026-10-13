@@ -578,7 +578,7 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
 
   ctx.tools.register(defineTool({
     name: 'bizagent_work_dispatch',
-    description: 'Create one formal Work responsibility and request notification, then start an independent DSH worker Session when the assignee has a mapped Workspace and both Homes have the same owner. Otherwise the Work stays open for the assignee\'s own Sessions. A launch failure is returned separately; the Work remains durable and can be retried with bizagent_work_start.',
+    description: 'Create one formal Work responsibility and request notification, then start an independent DSH worker Session in the assignee Home when both Homes have the same owner. Otherwise the Work stays open for the assignee\'s own Sessions. A launch failure is returned separately; the Work remains durable and can be retried with bizagent_work_start.',
     parameters: {
       to_address: { type: 'string', required: true, description: 'Assignee Agent Home address.' },
       goal: { type: 'string', required: true, description: 'What the assignee must achieve, in at most 200 characters; put details in acceptance_criteria.' },
@@ -617,7 +617,7 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
 
   ctx.tools.register(defineTool({
     name: 'bizagent_work_start',
-    description: 'As the requester, create or resume the one reserved DSH worker Session for an existing Work and wake it with the request. Requires an assignee Workspace mapping and the same owner for the requester and assignee Homes. Safe to retry after a launch failure.',
+    description: 'As the requester, create or resume the one reserved DSH worker Session for an existing Work and wake it with the request. Requires the same owner for the requester and assignee Homes. Safe to retry after a launch failure.',
     parameters: { work_id: { type: 'string', required: true } },
     output: JSON_OUTPUT,
     execute: async (args, exec) => jsonResult(workRunner.start(requireAgent(exec.agent), args.work_id)),

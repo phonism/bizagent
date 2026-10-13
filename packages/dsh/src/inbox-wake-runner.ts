@@ -82,8 +82,8 @@ export class InboxWakeRunner {
             : Date.parse(message.due)
           if (!Number.isFinite(threshold) || threshold > now) continue
           const home = this.service.inboxAddressHome(recipient)
-          const mapping = home === undefined ? undefined : this.config.workspaceHomes.find(item => item.address === home)
-          if (mapping === undefined || !this.eligibleOwner(message, recipient)) continue
+          const workspace = home === undefined ? undefined : this.service.homeWorkspaceRoot(home)
+          if (workspace === undefined || !this.eligibleOwner(message, recipient)) continue
           const id = stableId('inbox-nudge', `${recipient}:${message.id}`)
           const existing = this.service.ledger.getInboxWakePlan(id)
           if (existing === undefined && plans.some(plan => plan.recipient === recipient
@@ -94,7 +94,7 @@ export class InboxWakeRunner {
               schemaVersion: 1, id, recipient, messageIds: [message.id],
               sessionId: stableId('inbox-session', id), topicId: message.topicId ?? message.rootId,
               scope: 'topic', reason, hop: message.hop ?? message.chain,
-              workspace: mapping.root, dueAt: new Date(threshold).toISOString(),
+              workspace, dueAt: new Date(threshold).toISOString(),
               createdAt: new Date(now).toISOString(),
             }
             await this.service.ledger.putInboxWakePlan(plan)
@@ -170,8 +170,8 @@ export class InboxWakeRunner {
           if (busyRecipients.has(recipient)) continue
           if (claimed.has(`${recipient}\0${first.id}`) || !this.eligible(first, recipient, now, closedTopics)) continue
           const home = this.service.inboxAddressHome(recipient)
-          const mapping = home === undefined ? undefined : this.config.workspaceHomes.find(item => item.address === home)
-          if (mapping === undefined) continue
+          const workspace = home === undefined ? undefined : this.service.homeWorkspaceRoot(home)
+          if (workspace === undefined) continue
           const owner = this.senderOwner(first)
           const scope = first.priority === 'urgent'
             || this.service.ledger.getInboxReturnRoute(first.id, recipient)?.status === 'fallback'
@@ -192,7 +192,7 @@ export class InboxWakeRunner {
             schemaVersion: 1, id, recipient, messageIds: batch.map(message => message.id),
             sessionId: stableId('inbox-session', id), topicId: deepest.topicId ?? deepest.rootId, scope,
             hop: Math.max(...batch.map(message => message.hop ?? message.chain)),
-            workspace: mapping.root,
+            workspace,
             dueAt: new Date(this.dueAt(first, recipient)).toISOString(),
             createdAt: nowIso(),
           }
@@ -242,8 +242,9 @@ export class InboxWakeRunner {
       return 'skipped'
     }
     if (home === undefined) throw new PermanentWakeError('Inbox wake recipient Home is unavailable')
-    const mapping = this.config.workspaceHomes.find(item => item.address === home)
-    if (mapping?.root !== plan.workspace) throw new PermanentWakeError('Inbox wake Workspace mapping changed')
+    if (this.service.homeWorkspaceRoot(home) !== plan.workspace) {
+      throw new PermanentWakeError('Inbox wake Workspace mapping changed')
+    }
     if (this.service.store.findHome(home)?.status !== 'active') {
       throw new PermanentWakeError('Inbox wake recipient Home is inactive')
     }
