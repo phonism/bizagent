@@ -12,6 +12,8 @@ type SessionCatalog = Pick<SessionQueryEngine, 'listSessions' | 'readSession'>
 type ReturnPass = { queued: string[]; fallback: string[]; failed: { messageId: string; error: unknown }[] }
 type AgentInboxAddress = HomeAddress | ProjectSeatAddress
 const MAX_PER_PASS = 4
+/** Upper bound on Session reads spent re-confirming already queued returns in one pass. */
+const MAX_QUEUE_CHECKS_PER_PASS = 8
 const RETRY_DELAY_MS = 5 * 60_000
 /** Message kinds routed back to the Session that sent the letter they answer. */
 const RETURNED_KINDS: ReadonlySet<InboxMessage['kind']> = new Set(['ordinary', 'work-result'])
@@ -25,6 +27,8 @@ export class InboxReturnNotifier {
   private readonly handles = new Map<string, AgentHandle>()
   private readonly attaching = new Map<string, Promise<Agent>>()
   private readonly retryAfter = new Map<string, number>()
+  /** Returns already confirmed in their destination Session; they need no further reads. */
+  private readonly confirmedQueued = new Set<string>()
   private pass: Promise<ReturnPass> | undefined
   private closing = false
 
@@ -50,6 +54,7 @@ export class InboxReturnNotifier {
     const fallback: string[] = []
     const failed: { messageId: string; error: unknown }[] = []
     let attempted = 0
+    let queueChecks = 0
     const messages = this.ledger.listInboxMessages().reverse()
     for (const message of messages) {
       if (this.closing || attempted >= limit) break
@@ -60,7 +65,17 @@ export class InboxReturnNotifier {
       if (destination === undefined) continue
       const route = this.ledger.getInboxReturnRoute(message.id, recipient)
       if (route?.status === 'fallback' || (this.retryAfter.get(message.id) ?? 0) > now) continue
-      if (route?.status === 'queued' && await this.wasQueued(message, recipient, destination)) continue
+      if (route?.status === 'queued') {
+        const key = `${recipient}\u0000${message.id}`
+        if (this.confirmedQueued.has(key)) continue
+        // Each check may read a whole Session, so bound them per pass; later passes continue.
+        if (queueChecks >= MAX_QUEUE_CHECKS_PER_PASS) continue
+        queueChecks++
+        if (await this.wasQueued(message, recipient, destination)) {
+          this.confirmedQueued.add(key)
+          continue
+        }
+      }
       attempted++
       try {
         const result = await this.deliver(message, recipient, destination)

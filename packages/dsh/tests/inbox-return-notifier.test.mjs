@@ -224,3 +224,37 @@ test('formal Work result returns to the Session that dispatched the Work', async
   assert.equal(prompts.length, 1)
   await notifier.close()
 })
+
+test('queued returns are confirmed with a bounded number of Session reads and then left alone', async t => {
+  const { runtime, service, alice, reviewer, original } = await setup(t)
+  // Ten replies stay within the 12-letter topic budget and exceed the per-pass read bound.
+  for (let index = 0; index < 10; index++) {
+    await service.sendInboxMessage(reviewer, `reply-${index}`, {
+      to: ['personal:alice'], subject: `Result ${index}`, body: `Reply body ${index}.`,
+      replyTo: original.message.id, priority: 'urgent',
+    })
+  }
+  const prompts = []
+  const live = new Map([[alice.id, readyAgent(alice, prompts)]])
+  let reads = 0
+  const sessions = {
+    listSessions: (...args) => runtime.sessionQuery.listSessions(...args),
+    readSession: (...args) => { reads += 1; return runtime.sessionQuery.readSession(...args) },
+  }
+  const agents = { get(id) { return live.get(String(id)) },
+    async resume() { throw new Error('the live Session is reused while queuing') } }
+  const notifier = new InboxReturnNotifier(agents, sessions, runtime.ledger)
+  for (let pass = 0; pass < 3; pass++) await notifier.recoverBatch()
+  assert.equal(prompts.length, 10)
+  // The Session is no longer live, so confirming each queued return needs a Session read.
+  live.clear()
+  reads = 0
+  await notifier.recoverBatch()
+  assert.ok(reads > 0 && reads <= 8, `reads in one pass: ${reads}`)
+  await notifier.recoverBatch()
+  reads = 0
+  await notifier.recoverBatch()
+  assert.equal(reads, 0)
+  assert.equal(prompts.length, 10)
+  await notifier.close()
+})

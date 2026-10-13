@@ -328,13 +328,32 @@ async function applyLocked(ctx: Context, config: ResolvedConfig,
     inboxWakePass = task
     return task
   }
-  const runInboxDelivery = async (): Promise<void> => {
+  // One delivery run at a time: overlapping kicks (timer, urgent sends, replies) coalesce into
+  // a single follow-up run instead of concurrent passes.
+  let inboxDeliveryRun: Promise<void> | undefined
+  let inboxDeliveryQueued = false
+  const runInboxDeliveryOnce = async (): Promise<void> => {
     const outcomeReworks = await service.reconcileProjectOutcomeReworkNotifications()
     for (const failure of outcomeReworks.failed) {
       service.recordRuntimeError(`Project outcome rework notice ${failure.projectId}/${failure.claimId}`, failure.error)
     }
     await runInboxReturn()
     await runInboxWake()
+  }
+  const runInboxDelivery = (): Promise<void> => {
+    if (inboxDeliveryRun) {
+      inboxDeliveryQueued = true
+      return inboxDeliveryRun
+    }
+    const task = runInboxDeliveryOnce().finally(() => {
+      if (inboxDeliveryRun === task) inboxDeliveryRun = undefined
+      if (inboxDeliveryQueued) {
+        inboxDeliveryQueued = false
+        void runInboxDelivery().catch(error => service.recordRuntimeError('Inbox queued delivery', error))
+      }
+    })
+    inboxDeliveryRun = task
+    return task
   }
   registerTools(ctx, service, workRunner, learningRunner, message => {
     if (message.replyTo !== undefined || message.priority === 'urgent') {
