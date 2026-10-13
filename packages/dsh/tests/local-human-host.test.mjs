@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer, request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -182,4 +182,85 @@ test('local DSH human host accepts a private Bearer token and checks the current
   await chmod(tokenFile, 0o600)
   await assert.rejects(() => apply({ bizagent: service, webServer: { host: '0.0.0.0' }, effect() {} }),
     /bind 127\.0\.0\.1/)
+})
+
+test('without configuration the local human host creates a token and signs the browser in with a cookie', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'bizagent-human-auto-'))
+  const saved = Object.fromEntries(['BIZAGENT_LOCAL_HUMAN_ID', 'BIZAGENT_LOCAL_HUMAN_TOKEN_FILE', 'BIZAGENT_LOCAL_HUMAN']
+    .map(name => [name, process.env[name]]))
+  for (const name of Object.keys(saved)) delete process.env[name]
+  t.after(async () => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    await rm(root, { recursive: true, force: true })
+  })
+  const routes = new Map()
+  const reviews = []
+  const service = {
+    config: { owner: 'qi', homeRoot: root },
+    store: { getHome: address => ({ owner: address === 'personal:default' ? 'qi' : 'someone-else' }) },
+    projectLedger: { get: id => ({ id, lead: 'personal:default' }) },
+    async reviewProjectAsHuman(principal, input, authorize) {
+      const project = { id: input.projectId, lead: 'personal:default', status: 'awaiting_acceptance',
+        revision: input.expectedRevision, currentClaimId: input.claimId }
+      if (!await authorize(principal, project)) throw new Error('not authorized')
+      reviews.push(principal)
+      return { project: { ...project, status: 'accepted' }, review: { reviewedByPrincipal: principal } }
+    },
+  }
+  const ctx = (host, sink = routes) => ({ bizagent: service, bizagentAgentSessions: {},
+    webServer: { host, register: route => { sink.set(route.path, route.handler); return () => sink.delete(route.path) } },
+    effect: () => {} })
+
+  const publicRoutes = new Map()
+  await apply(ctx('0.0.0.0', publicRoutes))
+  assert.equal(publicRoutes.size, 0)
+  process.env.BIZAGENT_LOCAL_HUMAN = 'off'
+  await apply(ctx('127.0.0.1', publicRoutes))
+  assert.equal(publicRoutes.size, 0)
+  delete process.env.BIZAGENT_LOCAL_HUMAN
+
+  await apply(ctx('127.0.0.1'))
+  const tokenFile = join(root, 'local-human.token')
+  const token = (await readFile(tokenFile, 'utf8')).trim()
+  assert.equal((await stat(tokenFile)).mode & 0o777, 0o600)
+  const server = createServer((req, res) => {
+    const handler = routes.get(new URL(req.url, 'http://localhost').pathname)
+    if (handler) void handler(req, res)
+    else { res.writeHead(404); res.end() }
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) })
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const statusUrl = `${origin}/api/bizagent/local-human/status`
+
+  const anonymous = await fetch(statusUrl)
+  assert.equal(anonymous.status, 401)
+  assert.equal((await anonymous.json()).tokenFile, tokenFile)
+  assert.equal((await fetch(statusUrl, { method: 'POST', headers: { Origin: origin,
+    Authorization: `Bearer ${'x'.repeat(64)}` } })).status, 401)
+  assert.equal((await fetch(statusUrl, { method: 'POST',
+    headers: { Authorization: `Bearer ${token}` } })).status, 403)
+  const signIn = await fetch(statusUrl, { method: 'POST', headers: { Origin: origin,
+    Authorization: `Bearer ${token}` } })
+  assert.equal(signIn.status, 200)
+  const setCookie = signIn.headers.get('set-cookie')
+  assert.match(setCookie, /HttpOnly/)
+  assert.match(setCookie, /SameSite=Strict/)
+  assert.doesNotMatch(setCookie, new RegExp(token))
+  const cookie = setCookie.split(';')[0]
+  assert.deepEqual(await (await fetch(statusUrl, { headers: { Cookie: cookie } })).json(), { userId: 'qi' })
+  assert.equal((await fetch(statusUrl, { headers: { Cookie: 'bizagent_local_human=forged' } })).status, 401)
+
+  const review = await fetch(`${origin}/api/bizagent/project-review`, { method: 'POST',
+    headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'p1', claimId: 'c1', expectedRevision: 2, decision: 'accept', reason: 'Checked.' }) })
+  assert.equal(review.status, 200)
+  assert.deepEqual(reviews, ['qi'])
+
+  const signOut = await fetch(statusUrl, { method: 'DELETE', headers: { Origin: origin, Cookie: cookie } })
+  assert.equal(signOut.status, 200)
+  assert.match(signOut.headers.get('set-cookie'), /Max-Age=0/)
 })

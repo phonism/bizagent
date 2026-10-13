@@ -1,9 +1,10 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerHumanInboxRoute } from './human-inbox-transport.js'
+import { isLocalUserId } from './local-owner.js'
+import { LocalHumanCredential, clearLocalHumanCookieHeader, defaultLocalHumanTokenFile,
+  ensureLocalHumanToken, readLocalHumanToken } from './local-human-token.js'
 import { registerProjectReviewRoute } from './project-review-transport.js'
 import { registerProposalReviewRoute } from './proposal-review-transport.js'
 import { guardLocalRoute } from './route-guard.js'
@@ -13,38 +14,39 @@ import { BIZAGENT_AGENT_SESSION_API, BIZAGENT_LOCAL_HUMAN_STATUS_API } from './u
 export const name = 'bizagent-local-human-host'
 export const inject = ['bizagent', 'bizagentAgentSessions', 'webServer']
 
-const USER_ID = /^[a-zA-Z0-9._-]{1,100}$/
+const COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
-/** Local single-user adapter. The token stays outside DSH config and never enters Agent context. */
+/**
+ * Local single-user adapter: one person, identified by a private token file, reviews Projects and
+ * proposals and answers their Inbox from the browser. The token stays outside DSH config and Agent
+ * context. Without configuration it uses the BizAgent owner and creates
+ * `<homeRoot>/local-human.token`; BIZAGENT_LOCAL_HUMAN=off turns it off.
+ */
 export async function apply(ctx: Context): Promise<void> {
-  const tokenFile = process.env.BIZAGENT_LOCAL_HUMAN_TOKEN_FILE
-  const userId = process.env.BIZAGENT_LOCAL_HUMAN_ID
-  if (!tokenFile && !userId) return
-  if (!tokenFile || !userId || !USER_ID.test(userId)) {
-    throw new Error('Local human review needs BIZAGENT_LOCAL_HUMAN_ID and BIZAGENT_LOCAL_HUMAN_TOKEN_FILE')
+  if (process.env.BIZAGENT_LOCAL_HUMAN === 'off') return
+  const configuredFile = process.env.BIZAGENT_LOCAL_HUMAN_TOKEN_FILE?.trim()
+  const userId = process.env.BIZAGENT_LOCAL_HUMAN_ID?.trim() || ctx.bizagent.config.owner
+  if (!isLocalUserId(userId)) {
+    throw new Error('BIZAGENT_LOCAL_HUMAN_ID must use 1-100 letters, numbers, dots, underscores, or hyphens')
   }
   if (ctx.webServer.host !== '127.0.0.1') {
-    throw new Error('Local human Bearer review requires DSH Web to bind 127.0.0.1')
+    // An explicit setup is a promise to protect review routes, so a public bind is an error.
+    // The automatic setup simply stays off.
+    if (configuredFile) throw new Error('Local human review requires DSH Web to bind 127.0.0.1')
+    return
   }
-  const info = await stat(tokenFile)
-  if (!info.isFile() || (process.platform !== 'win32' && (info.mode & 0o077) !== 0)) {
-    throw new Error('Local human token file must be a private regular file (mode 0600)')
-  }
-  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
-    throw new Error('Local human token file must belong to the current user')
-  }
-  const token = (await readFile(tokenFile, 'utf8')).trim()
-  if (token.length < 32 || token.length > 512 || /\s/u.test(token)) {
-    throw new Error('Local human token must contain 32-512 non-whitespace characters')
-  }
-  const expected = createHash('sha256').update(token).digest()
-  const authenticate = (request: IncomingMessage): { userId: string } | null => {
+  const tokenFile = configuredFile || defaultLocalHumanTokenFile(ctx.bizagent.config.homeRoot)
+  if (!configuredFile) await ensureLocalHumanToken(tokenFile)
+  const credential = new LocalHumanCredential(await readLocalHumanToken(tokenFile))
+  const bearer = (request: IncomingMessage): string | undefined => {
     const header = request.headers.authorization
-    if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null
-    const candidate = header.slice('Bearer '.length)
-    if (candidate.length < 32 || candidate.length > 512 || /\s/u.test(candidate)) return null
-    const actual = createHash('sha256').update(candidate).digest()
-    return timingSafeEqual(actual, expected) ? { userId } : null
+    return typeof header === 'string' && header.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined
+  }
+  const authenticate = (request: IncomingMessage): { userId: string } | null => {
+    const token = bearer(request)
+    if (token !== undefined) return credential.matchesToken(token) ? { userId } : null
+    const cookie = request.headers.cookie
+    return credential.matchesCookie(typeof cookie === 'string' ? cookie : undefined) ? { userId } : null
   }
   const ownsHome = (address: string): boolean => {
     try { return ctx.bizagent.store.getHome(address).owner === userId }
@@ -58,12 +60,32 @@ export async function apply(ctx: Context): Promise<void> {
         response.setHeader('Cache-Control', 'no-store')
         response.setHeader('Content-Type', 'application/json; charset=utf-8')
         response.setHeader('X-Content-Type-Options', 'nosniff')
-        if (request.method !== 'GET') {
-          response.writeHead(405, { Allow: 'GET' }); response.end(JSON.stringify({ error: 'method-not-allowed' })); return
+        const reply = (status: number, body: unknown) => {
+          response.statusCode = status; response.end(JSON.stringify(body))
         }
-        const principal = authenticate(request)
-        response.statusCode = principal ? 200 : 401
-        response.end(JSON.stringify(principal ? { userId: principal.userId } : { error: 'authentication-required' }))
+        const method = request.method ?? 'GET'
+        if (method === 'GET') {
+          const principal = authenticate(request)
+          // The token file path is not secret; it tells the person where to find the token.
+          reply(principal ? 200 : 401, principal ? { userId: principal.userId }
+            : { error: 'authentication-required', tokenFile })
+          return
+        }
+        if (method === 'POST') {
+          // Sign this browser in: a valid Bearer token sets an HttpOnly cookie.
+          const token = bearer(request)
+          if (token === undefined || !credential.matchesToken(token)) {
+            reply(401, { error: 'authentication-required', tokenFile }); return
+          }
+          response.setHeader('Set-Cookie', credential.setCookieHeader(COOKIE_MAX_AGE_SECONDS))
+          reply(200, { userId }); return
+        }
+        if (method === 'DELETE') {
+          response.setHeader('Set-Cookie', clearLocalHumanCookieHeader())
+          reply(200, { signedOut: true }); return
+        }
+        response.setHeader('Allow', 'GET, POST, DELETE')
+        reply(405, { error: 'method-not-allowed' })
       }) }),
     ctx.webServer.register({ kind: 'exact', path: BIZAGENT_AGENT_SESSION_API,
       handler: guardLocalRoute(async (request, response) => {

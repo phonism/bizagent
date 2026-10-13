@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { HomeStore } from './home-store.js'
 import { exportHomeArchive, importHomeArchive, verifyHomeArchive } from './home-archive.js'
+import { defaultLocalHumanTokenFile, ensureLocalHumanToken, readLocalHumanToken } from './local-human-token.js'
 
 const args = process.argv.slice(2)
 
@@ -20,6 +21,14 @@ async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = parsed.args
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
     printHelp()
+    return
+  }
+  if (command === 'token') {
+    // The same file the DSH Web host reads; create it now if DSH has not started yet.
+    const configured = process.env['BIZAGENT_LOCAL_HUMAN_TOKEN_FILE']?.trim()
+    const file = configured || defaultLocalHumanTokenFile(parsed.root)
+    if (!configured) await ensureLocalHumanToken(file)
+    process.stdout.write(`${await readLocalHumanToken(file)}\n`)
     return
   }
   if (command === 'archive') {
@@ -138,6 +147,7 @@ function printHelp(): void {
   process.stdout.write(`  bizagent [--root PATH] home create ADDRESS [--name NAME] [--owner OWNER] [--identity-file FILE]\n`)
   process.stdout.write(`  bizagent [--root PATH] home list\n`)
   process.stdout.write(`  bizagent [--root PATH] doctor\n`)
+  process.stdout.write(`  bizagent [--root PATH] token          print the local review token for the browser\n`)
   process.stdout.write(`  bizagent [--root PATH] reindex\n`)
   process.stdout.write(`  bizagent [--root PATH] archive export DIRECTORY\n`)
   process.stdout.write(`  bizagent archive verify DIRECTORY\n`)

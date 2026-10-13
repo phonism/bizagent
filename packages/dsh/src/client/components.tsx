@@ -116,6 +116,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
   const [error, setError] = useState<string>()
   const [createOpen, setCreateOpen] = useState(false)
   const [localHumanStatus, setLocalHumanStatus] = useState<'hidden' | 'needed' | 'ready'>('hidden')
+  const [localHumanTokenFile, setLocalHumanTokenFile] = useState<string | undefined>(undefined)
   const [localHumanTokenInput, setLocalHumanTokenInput] = useState('')
   const [localHumanError, setLocalHumanError] = useState(false)
   const [localHumanBusy, setLocalHumanBusy] = useState(false)
@@ -155,8 +156,9 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
     if (!open || api.localHumanStatus === undefined) return
     const abort = new AbortController()
     void api.localHumanStatus(abort.signal).then(status => {
-      if (!abort.signal.aborted) setLocalHumanStatus(status.available
-        ? status.authenticated ? 'ready' : 'needed' : 'hidden')
+      if (abort.signal.aborted) return
+      setLocalHumanStatus(status.available ? status.authenticated ? 'ready' : 'needed' : 'hidden')
+      setLocalHumanTokenFile(status.tokenFile)
     }).catch(() => { if (!abort.signal.aborted) setLocalHumanStatus('hidden') })
     return () => { abort.abort() }
   }, [api, open])
@@ -364,6 +366,8 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
                   {t('localHuman.connect')}
                 </button>
                 {localHumanError ? <span role="alert">{t('localHuman.invalid')}</span> : null}
+                <small>{localHumanTokenFile === undefined ? t('localHuman.hint')
+                  : t('localHuman.hintFile', { file: localHumanTokenFile })}</small>
               </form>
             )}
           </div>
