@@ -6,12 +6,14 @@ import type { InboxMessage } from './domain.js'
 import type { WorkRunner } from './work-runner.js'
 import type { LearningSessionRunner } from './learning-session-runner.js'
 import type { FormalWork } from './work-ledger.js'
+import type { FormalProject } from './project-ledger.js'
 
 const JSON_OUTPUT = {
   schema: { type: 'json' as const },
   render: (_args: unknown, value: unknown) => [{
     type: 'text' as const,
-    text: JSON.stringify(value, null, 2),
+    // Compact JSON: indentation costs context on small local models and adds no information.
+    text: JSON.stringify(value),
   }],
 }
 
@@ -459,7 +461,7 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
 
   ctx.tools.register(defineTool({
     name: 'bizagent_projects',
-    description: 'List Projects led by the current Home or visible through an active Project Seat. A Project status is not evidence that DSH agents are currently running.',
+    description: 'List compact summaries of Projects led by the current Home or visible through an active Project Seat. Read one Project with bizagent_project_read. A Project status is not evidence that DSH agents are currently running.',
     parameters: {
       status: { type: 'string', enum: ['open', 'awaiting_acceptance', 'accepted'] },
       before_project_id: { type: 'string', description: 'Pagination cursor returned as nextBeforeProjectId.' },
@@ -471,16 +473,17 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
       ...(args.status !== undefined ? { status: args.status as 'open' | 'awaiting_acceptance' | 'accepted' } : {}),
       ...(args.before_project_id !== undefined ? { beforeProjectId: args.before_project_id } : {}),
       ...(args.limit !== undefined ? { limit: args.limit } : {}),
-    })),
+    }).then(result => ({ ...result, projects: result.projects.map(projectSummary) }))),
   }))
 
   ctx.tools.register(defineTool({
     name: 'bizagent_project_read',
-    description: 'As the lead or an active Project Seat Home, read one Project, its versioned submissions and reviews, and its linked formal Work.',
+    description: 'As the lead or an active Project Seat Home, read one Project, its versioned submissions and reviews, and summaries of its linked formal Work. Read a Work result with bizagent_work_read.',
     parameters: { project_id: { type: 'string', required: true } },
     output: JSON_OUTPUT,
     isConcurrencySafe: () => true,
-    execute: async (args, exec) => jsonResult(service.readProject(requireAgent(exec.agent), args.project_id)),
+    execute: async (args, exec) => jsonResult(service.readProject(requireAgent(exec.agent), args.project_id)
+      .then(result => ({ ...result, work: result.work.map(workSummary) }))),
   }))
 
   ctx.tools.register(defineTool({
@@ -621,7 +624,7 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
 
   ctx.tools.register(defineTool({
     name: 'bizagent_work',
-    description: 'List formal Work assigned to or requested by the current Home. Work status is separate from Inbox message handling.',
+    description: 'List compact summaries of formal Work assigned to or requested by the current Home. Read one Work and its result with bizagent_work_read. Work status is separate from Inbox message handling.',
     parameters: {
       direction: { type: 'string', enum: ['assigned', 'requested', 'both'] },
       status: { type: 'string', enum: ['open', 'accepted', 'completing', 'completed', 'cancelled'] },
@@ -635,7 +638,7 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
       ...(args.status !== undefined ? { status: args.status as 'open' | 'accepted' | 'completing' | 'completed' | 'cancelled' } : {}),
       ...(args.before_work_id !== undefined ? { beforeWorkId: args.before_work_id } : {}),
       ...(args.limit !== undefined ? { limit: args.limit } : {}),
-    })),
+    }).then(result => ({ ...result, works: result.works.map(workSummary) }))),
   }))
 
   ctx.tools.register(defineTool({
@@ -1003,6 +1006,35 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
 function requireAgent(agent: Agent | undefined): Agent {
   if (agent === undefined) throw new Error('BizAgent tools require a live DSH Agent session')
   return agent
+}
+
+/** One line per Project in lists; the full record stays one bizagent_project_read away. */
+function projectSummary(project: FormalProject) {
+  return {
+    id: project.id, title: project.title, status: project.status, lead: project.lead,
+    revision: project.revision, goal: clip(project.goal, 240),
+    seats: (project.seats ?? []).map(seat => ({ homeAddress: seat.homeAddress, status: seat.status })),
+    claims: project.claims.length,
+    ...(project.currentClaimId !== undefined ? { currentClaimId: project.currentClaimId } : {}),
+    ...(project.acceptedClaimId !== undefined ? { acceptedClaimId: project.acceptedClaimId } : {}),
+    updatedAt: project.updatedAt,
+  }
+}
+
+/** Work without its long acceptance criteria and result body; bizagent_work_read returns those. */
+function workSummary(work: FormalWork) {
+  return {
+    id: work.id, goal: work.goal, status: work.status, requester: work.requester, assignee: work.assignee,
+    ...(work.projectId !== undefined ? { projectId: work.projectId } : {}),
+    ...(work.resultMessageId !== undefined ? { resultMessageId: work.resultMessageId } : {}),
+    ...(work.resultSubject !== undefined ? { resultSubject: work.resultSubject } : {}),
+    ...(work.resultArtifacts !== undefined ? { resultArtifacts: work.resultArtifacts.length } : {}),
+    updatedAt: work.updatedAt,
+  }
+}
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`
 }
 
 async function jsonResult(value: Promise<unknown>): Promise<JsonValue> {

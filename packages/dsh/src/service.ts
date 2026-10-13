@@ -2293,7 +2293,7 @@ export class BizAgentService {
     status?: FormalWork['status']
     beforeWorkId?: string
     limit?: number
-  } = {}): Promise<Record<string, unknown>> {
+  } = {}): Promise<{ homeAddress: HomeAddress; works: FormalWork[]; nextBeforeWorkId: string | undefined }> {
     const ledger = this.requireWorkLedger()
     const binding = await this.requireDurableBinding(agent)
     const direction = input.direction ?? 'assigned'
