@@ -577,6 +577,8 @@ export const InboxWakePlanSchema = z.object({
   dueAt: z.string().min(1),
   createdAt: z.string().min(1),
   dispatchedAt: z.string().min(1).optional(),
+  /** Why the plan was retired without starting a Session; its letters stay in the normal Inbox. */
+  retiredReason: z.string().min(1).max(500).optional(),
 })
 
 export type InboxWakePlan = Omit<z.infer<typeof InboxWakePlanSchema>, 'recipient'> & {

@@ -465,12 +465,13 @@ export class LearningLedger {
     return parsed
   }
 
-  async markInboxWakeDispatched(id: string, dispatchedAt: string): Promise<InboxWakePlan> {
+  async markInboxWakeDispatched(id: string, dispatchedAt: string, retiredReason?: string): Promise<InboxWakePlan> {
     return this.withInboxWrite(async () => {
       const plan = this.getInboxWakePlan(id)
       if (plan === undefined) throw new Error(`Inbox wake plan not found: ${id}`)
       if (plan.dispatchedAt !== undefined) return plan
-      const updated = InboxWakePlanSchema.parse({ ...plan, dispatchedAt }) as InboxWakePlan
+      const updated = InboxWakePlanSchema.parse({ ...plan, dispatchedAt,
+        ...(retiredReason !== undefined ? { retiredReason: retiredReason.slice(0, 500) } : {}) }) as InboxWakePlan
       const key = `${INBOX_WAKE_PLAN_PREFIX}${id}`
       await this.domain.table('metadata').put(key, {
         key, value: JSON.stringify(updated), updatedAt: dispatchedAt,

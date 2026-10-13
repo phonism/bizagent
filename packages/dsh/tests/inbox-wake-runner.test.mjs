@@ -245,3 +245,72 @@ test('one recipient drains a 21-message owner batch after its first Session beco
   assert.deepEqual(new Set([...firstPlan.messageIds, ...secondPlan.messageIds]), new Set(ids))
   await runner.close()
 })
+
+async function wakeSetup(t, label) {
+  const root = await makeTempDir(`bizagent-inbox-wake-${label}-`)
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const reviewerCwd = `${root}/reviewer`
+  const movedCwd = `${root}/moved`
+  await Promise.all([mkdir(reviewerCwd), mkdir(movedCwd)])
+  const runtime = await createDemoRuntime()
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'personal:alice', owner: 'alice' })
+  await store.createHome({ address: 'role:reviewer', owner: 'alice' })
+  const config = { homeRoot: root, defaultHome: 'personal:alice', autoCreateDefaultHome: false,
+    workspaceHomes: [{ root: reviewerCwd, address: 'role:reviewer' }],
+    budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 } }
+  const service = new BizAgentService(store, runtime.ledger, config, runtime.sessionQuery)
+  await service.initialize()
+  const sender = runtime.agent('inbox-sender', root, 'Send.')
+  const letter = await service.sendInboxMessage(sender, 'urgent-letter', {
+    to: ['role:reviewer'], subject: 'Please review', body: 'Review this.', priority: 'urgent' })
+  return { root, runtime, service, config, movedCwd, letter }
+}
+
+test('a wake plan that can never start as planned is retired instead of retried forever', async t => {
+  const { runtime, service, config, movedCwd } = await wakeSetup(t, 'retire')
+  const agents = { get() { return undefined }, async create() { throw new Error('should not create') },
+    async resume() { throw new Error('should not resume') } }
+  const planner = new InboxWakeRunner(agents, runtime.sessionQuery, service, config)
+  const now = Date.now() + 60 * 60_000
+  // The first pass plans the wake and starts it; make creation fail transiently so the plan stays.
+  const transientAgents = { ...agents, async create() { throw new Error('provider timeout') } }
+  const transient = new InboxWakeRunner(transientAgents, runtime.sessionQuery, service, config)
+  const first = await transient.recoverBatch(1, now)
+  assert.equal(first.failed.length, 1)
+  const planId = first.failed[0].planId
+  await transient.close()
+  await planner.close()
+  // The Home's Workspace mapping then moves: that plan can never start in its recorded Workspace.
+  const moved = new InboxWakeRunner(agents, runtime.sessionQuery, service,
+    { ...config, workspaceHomes: [{ root: movedCwd, address: 'role:reviewer' }] })
+  const pass = await moved.recoverBatch(1, now)
+  assert.deepEqual(pass.failed, [])
+  assert.deepEqual(pass.skipped, [planId])
+  const plan = service.ledger.getInboxWakePlan(planId)
+  assert.ok(plan.dispatchedAt)
+  assert.match(plan.retiredReason, /Workspace mapping changed/)
+  assert.ok(service.listRuntimeIssues().some(issue => issue.message.startsWith(`Inbox wake ${planId} retired`)))
+  await moved.close()
+})
+
+test('an unclassified wake failure is retired after repeated attempts', async t => {
+  const { runtime, service, config } = await wakeSetup(t, 'attempts')
+  const agents = { get() { return undefined }, async create() { throw new Error('provider timeout') },
+    async resume() { throw new Error('should not resume') } }
+  const runner = new InboxWakeRunner(agents, runtime.sessionQuery, service, config)
+  let now = Date.now() + 60 * 60_000
+  let planId
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const pass = await runner.recoverBatch(1, now)
+    assert.equal(pass.failed.length, 1, `attempt ${attempt}`)
+    planId = pass.failed[0].planId
+    now += 6 * 60_000
+  }
+  const last = await runner.recoverBatch(1, now)
+  assert.deepEqual(last.failed, [])
+  assert.deepEqual(last.skipped, [planId])
+  assert.match(service.ledger.getInboxWakePlan(planId).retiredReason, /provider timeout/)
+  await runner.close()
+})

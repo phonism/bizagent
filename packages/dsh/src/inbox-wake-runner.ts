@@ -18,6 +18,11 @@ const MAX_PER_PASS = 4
 const BATCH_SIZE = 20
 const NORMAL_DELAY_MS = 15 * 60_000
 const RETRY_DELAY_MS = 5 * 60_000
+/** After this many consecutive failures an unclassified error retires the plan too (about 30 minutes). */
+const MAX_WAKE_ATTEMPTS = 6
+
+/** A wake that can never succeed as planned; retrying it would only hold its letters. */
+class PermanentWakeError extends Error {}
 const STALE_MESSAGE_MS = 24 * 60 * 60_000
 const STALE_RETURN_MS = 2 * 60 * 60_000
 
@@ -25,6 +30,7 @@ const STALE_RETURN_MS = 2 * 60 * 60_000
 export class InboxWakeRunner {
   private readonly handles = new Map<string, AgentHandle>()
   private readonly retryAfter = new Map<string, number>()
+  private readonly attempts = new Map<string, number>()
   private readonly starting = new Map<string, Promise<'started' | 'skipped'>>()
   private pass: Promise<WakePass> | undefined
   private closing = false
@@ -115,11 +121,25 @@ export class InboxWakeRunner {
       try {
         const outcome = await this.activateOnce(plan)
         this.retryAfter.delete(plan.id)
+        this.attempts.delete(plan.id)
         if (outcome === 'started') started.push(plan.id)
         else skipped.push(plan.id)
       } catch (error) {
-        this.retryAfter.set(plan.id, now + RETRY_DELAY_MS)
-        failed.push({ planId: plan.id, error })
+        const attempts = (this.attempts.get(plan.id) ?? 0) + 1
+        if (error instanceof PermanentWakeError || attempts >= MAX_WAKE_ATTEMPTS) {
+          // Retire the plan: its letters are released to the normal Inbox digest of the next Session.
+          this.retryAfter.delete(plan.id)
+          this.attempts.delete(plan.id)
+          const reason = error instanceof Error ? error.message : String(error)
+          await this.service.ledger.markInboxWakeDispatched(plan.id, nowIso(), reason)
+          this.service.recordRuntimeError(`Inbox wake ${plan.id} retired`, error,
+            this.service.inboxAddressHome(plan.recipient, true))
+          skipped.push(plan.id)
+        } else {
+          this.attempts.set(plan.id, attempts)
+          this.retryAfter.set(plan.id, now + RETRY_DELAY_MS)
+          failed.push({ planId: plan.id, error })
+        }
       }
     }
     return { started, skipped, failed }
@@ -220,11 +240,11 @@ export class InboxWakeRunner {
       await this.service.ledger.markInboxWakeDispatched(plan.id, nowIso())
       return 'skipped'
     }
-    if (home === undefined) throw new Error('Inbox wake recipient Home is unavailable')
+    if (home === undefined) throw new PermanentWakeError('Inbox wake recipient Home is unavailable')
     const mapping = this.config.workspaceHomes.find(item => item.address === home)
-    if (mapping?.root !== plan.workspace) throw new Error('Inbox wake Workspace mapping changed')
+    if (mapping?.root !== plan.workspace) throw new PermanentWakeError('Inbox wake Workspace mapping changed')
     if (this.service.store.findHome(home)?.status !== 'active') {
-      throw new Error('Inbox wake recipient Home is inactive')
+      throw new PermanentWakeError('Inbox wake recipient Home is inactive')
     }
     const info = await stat(plan.workspace)
     if (!info.isDirectory() || await realpath(plan.workspace) !== plan.workspace) {
@@ -236,13 +256,13 @@ export class InboxWakeRunner {
         || !message.to.includes(plan.recipient)
         || ((plan.scope ?? 'topic') === 'topic' && (message.topicId ?? message.rootId) !== plan.topicId)
         || this.service.ledger.getInboxDelivery(id, plan.recipient)?.status !== 'delivered') {
-        throw new Error(`Inbox wake source is not delivered to its recipient: ${id}`)
+        throw new PermanentWakeError(`Inbox wake source is not delivered to its recipient: ${id}`)
       }
       if (message.projectOutcomeRework && !this.isProjectNotice(message, plan.recipient)) {
         await this.service.ledger.markInboxWakeDispatched(plan.id, nowIso())
         return 'skipped'
       }
-      if (!this.eligibleOwner(message, plan.recipient)) throw new Error('Inbox wake owner changed')
+      if (!this.eligibleOwner(message, plan.recipient)) throw new PermanentWakeError('Inbox wake owner changed')
     }
     const closedTopics = closedInboxTopics(this.service.ledger.listInboxMessages())
     const pendingIds = plan.messageIds.filter(id => {
@@ -258,7 +278,7 @@ export class InboxWakeRunner {
     }
     const binding = this.service.ledger.getBinding(plan.sessionId)
     if (binding !== undefined && (binding.homeAddress !== home || binding.cwd !== plan.workspace)) {
-      throw new Error('Inbox wake Session binding conflicts with its plan')
+      throw new PermanentWakeError('Inbox wake Session binding conflicts with its plan')
     }
     await this.service.ledger.putBinding({
       sessionId: plan.sessionId, homeAddress: home, cwd: plan.workspace,
