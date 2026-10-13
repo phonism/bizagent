@@ -164,6 +164,20 @@ test('HomeStore creates and reloads a complete organization graph', async (t) =>
   assert.deepEqual(retried, created)
 })
 
+test('an organization created for one local person gives that person every Home', async (t) => {
+  const root = await makeTempDir('bizagent-organization-owner-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createOrganization({
+    id: 'solo-lab', name: 'Solo Lab', mission: 'ship small tools.', owner: 'qi',
+    members: [{ id: 'coder', displayName: 'Coder', roleId: 'engineering', roleName: 'Engineering',
+      responsibility: 'Build and maintain the tools.' }],
+    capabilities: [{ id: 'research', displayName: 'Research', responsibility: 'Keep research methods.' }],
+  })
+  assert.deepEqual([...new Set(store.listHomes().map(home => home.owner))], ['qi'])
+})
+
 test('HomeStore keeps the recorded owner when an Agent edits home.yaml', async (t) => {
   const root = await makeTempDir('bizagent-home-owner-record-')
   t.after(() => rm(root, { recursive: true, force: true }))

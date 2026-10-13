@@ -102,6 +102,8 @@ test('DSH plugin entry registers durable context and the complete v0.1 tool surf
     indexMaxBytes: 4096,
   })
 
+  assert.equal(provided.get('bizagent').store.getHome('personal:alice').owner,
+    provided.get('bizagent').config.owner)
   assert.equal(tools.length, 59)
   assert.deepEqual(tools.map(tool => tool.name).sort(), [
     'bizagent_agent_search',

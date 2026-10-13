@@ -3,6 +3,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import Schema from '@deepseek-ai/schemastery'
 import { type ContextBudget, type HomeAddress, parseHomeAddress } from './domain.js'
 import { hostTimeZone, nextCronAt, resolveTimeZone } from './cron.js'
+import { isLocalUserId, localOwnerId } from './local-owner.js'
 
 export interface LearningScheduleConfig {
   home: string
@@ -34,6 +35,7 @@ export interface Config {
   learningSchedulerEnabled?: boolean
   learningSchedules?: LearningScheduleConfig[]
   timeZone?: string
+  owner?: string
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -54,6 +56,9 @@ export const Config: Schema<Config> = Schema.object({
   })).default([]),
   timeZone: Schema.string().description(
     'IANA time zone for cron schedules and daily run limits. Defaults to the host time zone.'),
+  owner: Schema.string().description(
+    'Person who owns Homes this host creates (the default Home, onboarding organizations, and Homes created in the UI). '
+    + 'Defaults to $BIZAGENT_LOCAL_HUMAN_ID or the operating system user name.'),
 })
 
 export interface ResolvedConfig {
@@ -67,6 +72,7 @@ export interface ResolvedConfig {
   learningSchedulerEnabled: boolean
   learningSchedules: ReadonlyArray<ResolvedLearningSchedule>
   timeZone: string
+  owner: string
 }
 
 export function resolveConfig(input: Config = {}): ResolvedConfig {
@@ -91,6 +97,8 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     throw new TypeError('indexMaxBytes must be an integer >= 512')
   }
   const timeZone = input.timeZone?.trim() ? resolveTimeZone(input.timeZone) : hostTimeZone()
+  const owner = input.owner?.trim() || localOwnerId()
+  if (!isLocalUserId(owner)) throw new TypeError('owner must use 1-100 letters, numbers, dots, underscores, or hyphens')
   const learningSchedules = (input.learningSchedules ?? []).map(item => {
     const home = parseHomeAddress(item.home)
     const cron = item.cron.trim()
@@ -130,6 +138,7 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     learningSchedulerEnabled: input.learningSchedulerEnabled ?? false,
     learningSchedules,
     timeZone,
+    owner,
   }
 }
 

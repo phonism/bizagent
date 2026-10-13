@@ -164,6 +164,7 @@ export class BizAgentService {
       && !this.store.hasHome(this.config.defaultHome)) {
       await this.store.createHome({
         address: this.config.defaultHome,
+        owner: this.config.owner,
         ...(this.config.defaultIdentity !== undefined ? { identity: this.config.defaultIdentity } : {}),
       })
     }
@@ -203,7 +204,7 @@ export class BizAgentService {
 
     const nextStore = new HomeStore(location.organizationRoot)
     await nextStore.initialize()
-    await nextStore.createOrganization(input)
+    await nextStore.createOrganization({ ...input, owner: input.owner ?? this.config.owner })
     await saveActiveOrganizationLocation(this.config.homeRoot, location)
     this.store = nextStore
     this.activeOrganization = location

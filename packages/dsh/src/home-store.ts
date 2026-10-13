@@ -60,6 +60,8 @@ export interface CreateOrganizationInput {
   id: string
   name: string
   mission: string
+  /** Person who owns every Home in the organization. Defaults to each member id (members as people). */
+  owner?: string
   members: Array<{
     id: string
     displayName: string
@@ -243,7 +245,7 @@ export class HomeStore {
 
       const lineHome = parseHomeAddress(`line:${id}`)
       const businessHome = parseHomeAddress(`business:${id}`)
-      const lineOwner = normalizeId(input.members[0]!.id, 'line owner')
+      const lineOwner = input.owner ?? normalizeId(input.members[0]!.id, 'line owner')
       const memberHomes: Organization['members'] = []
       const capabilityHomes: HomeAddress[] = []
       const links: Organization['links'] = []
@@ -294,7 +296,7 @@ export class HomeStore {
         homeInputs.push({
           address: personalHome,
           displayName,
-          owner: memberId,
+          owner: input.owner ?? memberId,
           identity: `${displayName} is a member of ${name} and fulfills the ${roleName} role.\n\nResponsibility: ${responsibility}`,
         })
         memberHomes.push({ personalHome, roleHome })

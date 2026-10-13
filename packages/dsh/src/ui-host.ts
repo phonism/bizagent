@@ -198,7 +198,7 @@ export class BizAgentUiFacade {
     const home = await this.service.store.createHome({
       address: input.address,
       ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
-      ...(input.owner !== undefined ? { owner: input.owner } : {}),
+      owner: input.owner ?? this.service.config.owner,
       ...(input.identity !== undefined ? { identity: input.identity } : {}),
     })
     return this.home(home.address)
