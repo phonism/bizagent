@@ -151,7 +151,12 @@ export class SharedKnowledgeStore {
     return { ...metadata, body, path }
   }
 
-  async search(targets: readonly SharedKnowledgeTarget[], query = ''): Promise<SharedKnowledgeDocument[]> {
+  /**
+   * Search the shared layers. A document that fails its safety or integrity checks is skipped and
+   * reported through `onSkip`, so one hand-edited file cannot break retrieval for every Home.
+   */
+  async search(targets: readonly SharedKnowledgeTarget[], query = '',
+    onSkip?: (path: string, error: unknown) => void): Promise<SharedKnowledgeDocument[]> {
     const terms = query.trim().toLowerCase()
     const results: SharedKnowledgeDocument[] = []
     for (const target of targets) {
@@ -162,7 +167,13 @@ export class SharedKnowledgeStore {
       catch (error) { if (isMissing(error)) continue; throw error }
       for (const entry of entries) {
         if (!entry.isFile() || !/^knowledge-[a-f0-9]{20}\.md$/.test(entry.name)) continue
-        const document = await this.read(target, entry.name.slice(0, -3))
+        let document: SharedKnowledgeDocument | undefined
+        try {
+          document = await this.read(target, entry.name.slice(0, -3))
+        } catch (error) {
+          onSkip?.(join(directory, entry.name), error)
+          continue
+        }
         if (document && (!terms || `${document.description}\n${document.body}`.toLowerCase().includes(terms))) {
           results.push(document)
         }

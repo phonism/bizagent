@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
+import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import YAML from 'yaml'
 import { z } from 'zod'
 import {
@@ -22,7 +22,7 @@ import {
   safeHomeId,
 } from './domain.js'
 import { DEFAULT_INBOX_WAKE_POLICY, InboxWakePolicySchema, type InboxWakePolicy } from './inbox-wake-policy.js'
-import { readRegularFileNoFollow } from './safe-file.js'
+import { readRegularFileNoFollow, writeFileDurably } from './safe-file.js'
 
 const DIRECTORY_SCHEMA = z.object({
   schemaVersion: z.literal(1),
@@ -124,6 +124,7 @@ export class HomeStore {
   readonly organizationFile: string
   private readonly homes = new Map<HomeAddress, HomeCache>()
   private organization: Organization | undefined
+  private organizationLoadError: string | undefined
   private integrityIssues: string[] = []
   private mutationTail: Promise<unknown> = Promise.resolve()
 
@@ -157,10 +158,14 @@ export class HomeStore {
       try {
         cache = await this.loadHome(directory)
       } catch (error) {
-        throw new Error(`cannot load Agent Home at ${directory}: ${errorMessage(error)}`, { cause: error })
+        // A Home that fails to load or validate stays unavailable, but must not take the other
+        // Homes down with it; doctor and health report why it was skipped.
+        this.integrityIssues.push(`Agent Home skipped: ${this.relativePath(directory)}: ${this.relativeMessage(error)}`)
+        continue
       }
       if (this.homes.has(cache.home.address)) {
-        throw new Error(`duplicate Agent Home address: ${cache.home.address}`)
+        this.integrityIssues.push(`Agent Home skipped: duplicate address ${cache.home.address} at ${this.relativePath(directory)}`)
+        continue
       }
       this.keepRecordedOwner(cache, recordedOwners)
       this.homes.set(cache.home.address, cache)
@@ -218,6 +223,9 @@ export class HomeStore {
       if (this.organization !== undefined) {
         if (this.organization.id === input.id) return structuredClone(this.organization)
         throw new Error(`organization already exists: ${this.organization.id}`)
+      }
+      if (this.organizationLoadError !== undefined) {
+        throw new Error('organization.yaml exists but could not be loaded; fix or move it before creating an organization')
       }
 
       const id = normalizeId(input.id, 'organization')
@@ -503,6 +511,16 @@ export class HomeStore {
     ].join('\n')
   }
 
+  private relativePath(path: string): string {
+    const rel = relative(this.root, path)
+    return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : path
+  }
+
+  /** Error text for issues, with absolute paths under the root shown relative to it. */
+  private relativeMessage(error: unknown): string {
+    return errorMessage(error).split(`${this.root}/`).join('')
+  }
+
   async doctor(): Promise<DoctorReport> {
     const issues: string[] = []
     let assetCount = 0
@@ -588,11 +606,16 @@ export class HomeStore {
       for (const entry of entries) {
         if (!entry.isFile() || !entry.name.endsWith('.md')) continue
         const bodyPath = join(assetDirectory, entry.name)
-        const asset = parseAsset(await readManagedText(bodyPath), bodyPath)
-        if (asset.kind !== kind) throw new Error(`${bodyPath}: kind ${asset.kind} does not match directory ${kind}`)
-        if (asset.ownerAddress !== home.address) throw new Error(`${bodyPath}: owner does not match ${home.address}`)
-        if (assets.has(asset.id)) throw new Error(`${bodyPath}: duplicate asset id ${asset.id}`)
-        assets.set(asset.id, asset)
+        try {
+          const asset = parseAsset(await readManagedText(bodyPath), bodyPath)
+          if (asset.kind !== kind) throw new Error(`${bodyPath}: kind ${asset.kind} does not match directory ${kind}`)
+          if (asset.ownerAddress !== home.address) throw new Error(`${bodyPath}: owner does not match ${home.address}`)
+          if (assets.has(asset.id)) throw new Error(`${bodyPath}: duplicate asset id ${asset.id}`)
+          assets.set(asset.id, asset)
+        } catch (error) {
+          // One unreadable or invalid asset is left out instead of hiding the whole Home.
+          this.integrityIssues.push(`asset skipped: ${this.relativeMessage(error)}`)
+        }
       }
     }
     const digest = contextDigest(identity, [...assets.values()])
@@ -609,6 +632,18 @@ export class HomeStore {
   }
 
   private async loadOrganization(): Promise<void> {
+    this.organizationLoadError = undefined
+    try {
+      await this.loadOrganizationFile()
+    } catch (error) {
+      // The Homes stay usable; organization features wait until organization.yaml is fixed.
+      this.organization = undefined
+      this.organizationLoadError = this.relativeMessage(error)
+      this.integrityIssues.push(`organization unavailable: ${this.organizationLoadError}`)
+    }
+  }
+
+  private async loadOrganizationFile(): Promise<void> {
     let raw: unknown
     try {
       raw = YAML.parse(await readManagedText(this.organizationFile))
@@ -797,7 +832,9 @@ function renderAsset(asset: StoredAsset): string {
   return `---\n${YAML.stringify(metadata, { lineWidth: 0 }).trimEnd()}\n---\n\n${asset.body}\n`
 }
 
-function parseAsset(input: string, bodyPath: string): StoredAsset {
+function parseAsset(raw: string, bodyPath: string): StoredAsset {
+  // A git checkout with autocrlf turns frontmatter delimiters into CRLF; parse those the same way.
+  const input = raw.replace(/\r\n/g, '\n')
   if (!input.startsWith('---\n')) throw new Error(`${bodyPath}: missing YAML frontmatter`)
   const end = input.indexOf('\n---\n', 4)
   if (end < 0) throw new Error(`${bodyPath}: unterminated YAML frontmatter`)
@@ -876,10 +913,7 @@ function truncateUtf8(value: string, maxBytes: number): string {
 }
 
 async function atomicWrite(path: string, contents: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
-  await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 })
-  await rename(temporary, path)
+  await writeFileDurably(path, contents)
 }
 
 function errorMessage(error: unknown): string {

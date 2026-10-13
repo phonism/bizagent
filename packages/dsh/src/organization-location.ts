@@ -1,9 +1,9 @@
-import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import YAML from 'yaml'
 import { z } from 'zod'
 import { nowIso } from './domain.js'
+import { writeFileDurably } from './safe-file.js'
 
 const ORGANIZATION_ID = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/)
 
@@ -58,11 +58,7 @@ export async function saveActiveOrganizationLocation(
   registryRoot: string,
   location: ActiveOrganizationLocation,
 ): Promise<void> {
-  const path = activeOrganizationLocationPath(registryRoot)
-  await mkdir(dirname(path), { recursive: true })
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
-  await writeFile(temporary, YAML.stringify(location, { lineWidth: 0 }), { encoding: 'utf8', mode: 0o600 })
-  await rename(temporary, path)
+  await writeFileDurably(activeOrganizationLocationPath(registryRoot), YAML.stringify(location, { lineWidth: 0 }))
 }
 
 function isNotFound(error: unknown): boolean {

@@ -205,6 +205,19 @@ test('HomeStore accepts home.yaml owners from a directory written before owners 
   assert.match(await readFile(directoryFile, 'utf8'), /owner: alice/)
 })
 
+// A tampered or unreadable Home is refused on its own: it is not loaded and doctor reports why,
+// while the other Homes in the store keep loading.
+async function assertHomeRefused(root, address, reason, label) {
+  const reloaded = new HomeStore(root)
+  await reloaded.initialize()
+  assert.equal(reloaded.hasHome(address), false, label)
+  assert.equal(reloaded.hasHome('role:healthy'), true, label)
+  const report = await reloaded.doctor()
+  assert.equal(report.ok, false, label)
+  assert.ok(report.issues.some(issue => issue.startsWith('Agent Home skipped:') && reason.test(issue)),
+    `${label}: ${JSON.stringify(report.issues)}`)
+}
+
 test('HomeStore rejects home.yaml identity fields that do not match the Home address', async (t) => {
   for (const [label, tamper] of [
     ['type', text => text.replace('type: role', 'type: business')],
@@ -216,12 +229,13 @@ test('HomeStore rejects home.yaml identity fields that do not match the Home add
     const store = new HomeStore(root)
     await store.initialize()
     await store.createHome({ address: 'role:reviewer', owner: 'alice' })
+    await store.createHome({ address: 'role:healthy', owner: 'alice' })
     const file = join(root, 'homes', safeHomeId('role:reviewer'), 'home.yaml')
     const original = await readFile(file, 'utf8')
     const tampered = tamper(original)
     assert.notEqual(tampered, original, label)
     await writeFile(file, tampered)
-    await assert.rejects(() => new HomeStore(root).initialize(), /does not match/, label)
+    await assertHomeRefused(root, 'role:reviewer', /does not match/, label)
   }
 
   const root = await makeTempDir('bizagent-home-identity-dir-')
@@ -229,8 +243,9 @@ test('HomeStore rejects home.yaml identity fields that do not match the Home add
   const store = new HomeStore(root)
   await store.initialize()
   await store.createHome({ address: 'role:reviewer' })
+  await store.createHome({ address: 'role:healthy' })
   await rename(join(root, 'homes', safeHomeId('role:reviewer')), join(root, 'homes', 'renamed-home'))
-  await assert.rejects(() => new HomeStore(root).initialize(), /directory name does not match/)
+  await assertHomeRefused(root, 'role:reviewer', /directory name does not match/, 'directory')
 })
 
 test('HomeStore does not follow a symlink for managed Home files', async (t) => {
@@ -239,10 +254,58 @@ test('HomeStore does not follow a symlink for managed Home files', async (t) => 
   const store = new HomeStore(root)
   await store.initialize()
   await store.createHome({ address: 'role:reviewer', identity: 'Reviewer identity.' })
+  await store.createHome({ address: 'role:healthy' })
   const outside = join(root, 'outside-identity.md')
   await writeFile(outside, 'Injected identity from outside the Home.\n')
   const identityFile = join(root, 'homes', safeHomeId('role:reviewer'), 'identity.md')
   await rm(identityFile)
   await symlink(outside, identityFile)
-  await assert.rejects(() => new HomeStore(root).initialize(), /symlink/)
+  await assertHomeRefused(root, 'role:reviewer', /symlink/, 'identity symlink')
+})
+
+test('one unreadable asset is skipped and reported; CRLF assets still load', async (t) => {
+  const root = await makeTempDir('bizagent-home-bad-asset-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'role:reviewer' })
+  const good = await store.createAsset({ id: 'memory-good', ownerAddress: 'role:reviewer', kind: 'memory',
+    description: 'Good memory', body: 'Still readable.', sourceRefs: [{ type: 'session-events', sessionId: 'session-a', fromSeq: 1, toSeq: 2 }], status: 'active' })
+  const crlf = await store.createAsset({ id: 'memory-crlf', ownerAddress: 'role:reviewer', kind: 'memory',
+    description: 'CRLF memory', body: 'Checked out with autocrlf.', sourceRefs: [{ type: 'session-events', sessionId: 'session-a', fromSeq: 1, toSeq: 2 }], status: 'active' })
+  await writeFile(crlf.bodyPath, (await readFile(crlf.bodyPath, 'utf8')).replace(/\n/g, '\r\n'))
+  // An empty file, as a power loss during an old non-durable write could leave behind.
+  await writeFile(join(root, 'homes', safeHomeId('role:reviewer'), 'memory', 'memory-empty.md'), '')
+
+  const reloaded = new HomeStore(root)
+  await reloaded.initialize()
+  const ids = reloaded.listAssets('role:reviewer').map(asset => asset.id).sort()
+  assert.deepEqual(ids, [crlf.id, good.id].sort())
+  assert.match(reloaded.readAsset('role:reviewer', crlf.id).body, /Checked out with autocrlf\./)
+  const report = await reloaded.doctor()
+  assert.equal(report.ok, false)
+  assert.ok(report.issues.some(issue => issue.startsWith('asset skipped:') && issue.includes('memory-empty.md')),
+    JSON.stringify(report.issues))
+  assert.ok(report.issues.every(issue => !issue.includes(root)), 'issues use paths relative to the store')
+})
+
+test('a broken organization.yaml leaves the Homes usable and is never overwritten', async (t) => {
+  const root = await makeTempDir('bizagent-home-bad-org-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'role:reviewer' })
+  await writeFile(join(root, 'organization.yaml'), 'id: [unterminated\n')
+
+  const reloaded = new HomeStore(root)
+  await reloaded.initialize()
+  assert.equal(reloaded.hasHome('role:reviewer'), true)
+  assert.equal(reloaded.getOrganization(), undefined)
+  const report = await reloaded.doctor()
+  assert.ok(report.issues.some(issue => issue.startsWith('organization unavailable:')), JSON.stringify(report.issues))
+  await assert.rejects(() => reloaded.createOrganization({ id: 'replacement', name: 'Replacement',
+    mission: 'must not overwrite the broken file.', members: [{ id: 'alice', displayName: 'Alice',
+      roleId: 'lead', roleName: 'Lead', responsibility: 'Lead.' }], capabilities: [] }),
+  /organization\.yaml exists but could not be loaded/)
+  assert.equal(await readFile(join(root, 'organization.yaml'), 'utf8'), 'id: [unterminated\n')
 })

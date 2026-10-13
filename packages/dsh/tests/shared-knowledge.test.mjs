@@ -118,3 +118,47 @@ test('line and platform Knowledge require human review, keep separate ownership,
   assert.equal(resumed.ledger.getSharedKnowledgeProposal(crash.id).status, 'accepted')
   assert.equal((await resumed.searchSharedKnowledge(alice, 'Recovered rule')).count, 1)
 })
+
+test('a hand-edited shared Knowledge document is skipped by search but still refused on read', async t => {
+  const root = await makeTempDir('bizagent-shared-skip-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new SharedKnowledgeStore(root)
+  const publish = async (key, body) => {
+    const proposalId = stableId('proposal', key)
+    return store.publish({ scope: 'common', id: stableId('knowledge', proposalId), description: key, body,
+      proposalId, reviewerId: 'alice', authorityRef: 'platform.admin:alice', publishedAt: new Date().toISOString() })
+  }
+  const kept = await publish('kept-rule', 'Verify the source first.')
+  const edited = await publish('edited-rule', 'Original reviewed text.')
+  await writeFile(edited.path, (await readFile(edited.path, 'utf8')).replace('Original', 'Unreviewed'))
+  const skipped = []
+  const results = await store.search([{ scope: 'common' }], '', path => skipped.push(path))
+  assert.deepEqual(results.map(document => document.id), [kept.id])
+  assert.deepEqual(skipped, [edited.path])
+  await assert.rejects(() => store.read({ scope: 'common' }, edited.id), /integrity mismatch/)
+})
+
+test('a pending proposal whose target Home became unavailable does not block startup', async t => {
+  const root = await makeTempDir('bizagent-proposal-target-gone-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const runtime = await createDemoRuntime()
+  const config = { homeRoot: root, defaultHome: 'personal:alice', autoCreateDefaultHome: false,
+    workspaceHomes: [{ root, address: 'personal:alice' }], budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 } }
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'personal:alice', owner: 'alice' })
+  await store.createHome({ address: 'role:target', owner: 'alice' })
+  const service = new BizAgentService(store, runtime.ledger, config, runtime.sessionQuery)
+  await service.initialize()
+  const alice = runtime.agent('session-alice', root, 'Propose a rule.')
+  const proposed = await service.proposeMemory(alice, 'call-1', {
+    toAddress: 'role:target', description: 'Rule', body: 'Exclude refunds from GMV.' })
+  assert.equal(proposed.proposal.status, 'pending')
+  // The target Home is removed while the proposal is still pending.
+  await rm(join(root, 'homes', store.getHome('role:target').id), { recursive: true, force: true })
+  const restartedStore = new HomeStore(root)
+  await restartedStore.initialize()
+  const restarted = new BizAgentService(restartedStore, runtime.ledger, config, runtime.sessionQuery)
+  await restarted.initialize()
+  assert.equal(restartedStore.hasHome('personal:alice'), true)
+})

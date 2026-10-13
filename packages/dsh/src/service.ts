@@ -2744,8 +2744,7 @@ export class BizAgentService {
       limit,
     }).map(publicAssetIndex)
     const sharedKnowledge = input.kind !== undefined && input.kind !== 'knowledge' ? []
-      : (await new SharedKnowledgeStore(this.store.root)
-        .search(this.sharedKnowledgeTargets(binding.homeAddress), input.query))
+      : (await this.searchSharedKnowledgeLayers(this.sharedKnowledgeTargets(binding.homeAddress), input.query))
         .filter(document => this.verifiedSharedKnowledgeDocument(document))
         .slice(0, Math.max(0, limit - assets.length))
         .map(({ body: _body, ...document }) => document)
@@ -2791,8 +2790,7 @@ export class BizAgentService {
     const binding = await this.requireDurableBinding(agent)
     const assets = this.store.searchAssets(binding.homeAddress, input).map(publicAssetIndex)
     const sharedKnowledge = input.kind !== undefined && input.kind !== 'knowledge' ? []
-      : (await new SharedKnowledgeStore(this.store.root)
-        .search(this.sharedKnowledgeTargets(binding.homeAddress), input.query))
+      : (await this.searchSharedKnowledgeLayers(this.sharedKnowledgeTargets(binding.homeAddress), input.query))
         .filter(document => this.verifiedSharedKnowledgeDocument(document))
         .slice(0, Math.max(0, boundedLimit(input.limit, 20, 100) - assets.length))
         .map(({ body: _body, ...document }) => document)
@@ -2821,11 +2819,17 @@ export class BizAgentService {
     return targets
   }
 
+  private searchSharedKnowledgeLayers(targets: readonly SharedKnowledgeTarget[], query?: string) {
+    return new SharedKnowledgeStore(this.store.root).search(targets, query, (path, error) => {
+      this.recordRuntimeError(`Shared Knowledge skipped ${relative(this.store.root, path)}`, error)
+    })
+  }
+
   private async refreshSharedKnowledgeIndex(): Promise<void> {
     const targets: SharedKnowledgeTarget[] = [{ scope: 'common' },
       ...this.store.listHomes().filter(home => home.type === 'line')
         .map(home => ({ scope: 'line' as const, line: home.address.slice('line:'.length) }))]
-    const documents = (await new SharedKnowledgeStore(this.store.root).search(targets))
+    const documents = (await this.searchSharedKnowledgeLayers(targets))
       .filter(document => this.verifiedSharedKnowledgeDocument(document))
     this.sharedKnowledgeIndex = documents.map(({ id, scope, line, description, path }) => ({
       id, scope, ...(line === undefined ? {} : { line }), description, path,
@@ -2870,7 +2874,7 @@ export class BizAgentService {
   async searchSharedKnowledge(agent: Agent, query?: string): Promise<Record<string, unknown>> {
     const binding = await this.requireDurableBinding(agent)
     const targets = this.sharedKnowledgeTargets(binding.homeAddress)
-    const documents = (await new SharedKnowledgeStore(this.store.root).search(targets, query))
+    const documents = (await this.searchSharedKnowledgeLayers(targets, query))
       .filter(document => this.verifiedSharedKnowledgeDocument(document))
     return { homeAddress: binding.homeAddress, count: documents.length,
       documents: documents.map(({ body: _body, ...document }) => document) }
@@ -3664,7 +3668,15 @@ export class BizAgentService {
 
   private async reconcileProposals(): Promise<void> {
     for (const proposal of this.ledger.listProposals({ status: 'pending' })) {
-      const asset = this.store.findAssetByProposalId(proposal.toAddress, proposal.id)
+      let asset: StoredAsset | undefined
+      try {
+        asset = this.store.findAssetByProposalId(proposal.toAddress, proposal.id)
+      } catch (error) {
+        // An archived, skipped, or missing target Home leaves this proposal pending; it must not
+        // stop the plugin from starting.
+        this.persistenceErrors.push(`pending proposal ${proposal.id} target is unavailable: ${errorMessage(error)}`)
+        continue
+      }
       if (asset === undefined) continue
       if (proposal.humanReview?.action !== 'accept') {
         this.persistenceErrors.push(`pending proposal ${proposal.id} has an application without human review`)

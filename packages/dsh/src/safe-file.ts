@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { lstat, open } from 'node:fs/promises'
+import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises'
+import { dirname } from 'node:path'
 
 export interface RegularFileIdentity {
   dev: number
@@ -54,4 +56,44 @@ export async function readRegularFileNoFollow(path: string, options: ReadRegular
 
 function isErrno(error: unknown, code: string): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === code
+}
+
+/**
+ * Replace a file so that a crash or power loss leaves either the old or the new contents, never an
+ * empty file: write a private temporary file, fsync it, rename it over the target, then fsync the
+ * directory so the rename itself is durable (best effort where directories cannot be fsynced).
+ */
+export async function writeFileDurably(path: string, contents: string | Uint8Array): Promise<void> {
+  const directory = dirname(path)
+  await mkdir(directory, { recursive: true })
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
+  const handle = await open(temporary, 'wx', 0o600)
+  try {
+    await handle.writeFile(contents)
+    await handle.sync()
+  } catch (error) {
+    await handle.close().catch(() => undefined)
+    await unlink(temporary).catch(() => undefined)
+    throw error
+  }
+  await handle.close()
+  try {
+    await rename(temporary, path)
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined)
+    throw error
+  }
+  await syncDirectory(directory)
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  let handle
+  try {
+    handle = await open(directory, constants.O_RDONLY)
+    await handle.sync()
+  } catch {
+    // Some platforms and filesystems cannot fsync a directory; the file itself is already synced.
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
 }
