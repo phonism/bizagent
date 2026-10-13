@@ -3574,7 +3574,8 @@ export class BizAgentService {
     if (cwd !== undefined) {
       const target = resolve(cwd)
       const mappings = [
-        ...this.store.listHomes().map(home => ({
+        // Archived Homes no longer bind new Sessions (and their Workspace path is not served).
+        ...this.store.listHomes().filter(home => home.status === 'active').map(home => ({
           address: home.address, root: this.store.homeWorkspacePath(home.address),
         })),
         ...this.config.workspaceHomes,

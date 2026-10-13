@@ -192,6 +192,14 @@ export class HomeStore {
     return structuredClone(this.requireHome(parseHomeAddress(address)).home)
   }
 
+  /** Any loaded Home, including an archived one, or undefined; never throws for an unknown address. */
+  findHome(address: string): AgentHome | undefined {
+    let parsed: HomeAddress
+    try { parsed = parseHomeAddress(address) } catch { return undefined }
+    const cache = this.homes.get(parsed)
+    return cache === undefined ? undefined : structuredClone(cache.home)
+  }
+
   /** The Home's fixed DSH Workspace, shared by Principal, Project Main and Seats. */
   homeWorkspacePath(address: string): string {
     return this.requireHome(parseHomeAddress(address)).directory

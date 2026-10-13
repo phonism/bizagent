@@ -193,12 +193,12 @@ export class InboxWakeRunner {
     // DSH has no per-wake execution principal. Restrict automatic starts to one explicit owner.
     const home = this.service.inboxAddressHome(recipient)
     if (home === undefined) return false
-    const target = this.service.store.getHome(home)
+    const target = this.service.store.findHome(home)
     const senderHome = this.service.inboxAddressHome(message.fromAddress, true)
     return (this.isProjectNotice(message, recipient)
       || isUserAddress(message.fromAddress) || (senderHome !== undefined
-      && this.service.store.getHome(senderHome).status === 'active'))
-      && target.status === 'active' && this.senderOwner(message) !== undefined
+      && this.service.store.findHome(senderHome)?.status === 'active'))
+      && target?.status === 'active' && this.senderOwner(message) !== undefined
       && this.senderOwner(message) === target.owner
   }
 
@@ -223,7 +223,7 @@ export class InboxWakeRunner {
     if (home === undefined) throw new Error('Inbox wake recipient Home is unavailable')
     const mapping = this.config.workspaceHomes.find(item => item.address === home)
     if (mapping?.root !== plan.workspace) throw new Error('Inbox wake Workspace mapping changed')
-    if (this.service.store.getHome(home).status !== 'active') {
+    if (this.service.store.findHome(home)?.status !== 'active') {
       throw new Error('Inbox wake recipient Home is inactive')
     }
     const info = await stat(plan.workspace)
@@ -322,12 +322,12 @@ export class InboxWakeRunner {
   private eligibleOwner(message: InboxMessage, recipient: HomeAddress | ProjectSeatAddress): boolean {
     const home = this.service.inboxAddressHome(recipient)
     if (home === undefined) return false
-    const target = this.service.store.getHome(home)
+    const target = this.service.store.findHome(home)
     const senderHome = this.service.inboxAddressHome(message.fromAddress, true)
     return (this.isProjectNotice(message, recipient)
       || isUserAddress(message.fromAddress) || (senderHome !== undefined
-      && this.service.store.getHome(senderHome).status === 'active'))
-      && target.status === 'active' && this.senderOwner(message) !== undefined
+      && this.service.store.findHome(senderHome)?.status === 'active'))
+      && target?.status === 'active' && this.senderOwner(message) !== undefined
       && this.senderOwner(message) === target.owner
   }
 
@@ -335,12 +335,12 @@ export class InboxWakeRunner {
     const projectNotice = message.projectOutcomeRework
     if (projectNotice !== undefined) {
       if (!this.isProjectNotice(message, projectNotice.lead as HomeAddress)) return undefined
-      return this.service.store.getHome(projectNotice.lead).owner
+      return this.service.store.findHome(projectNotice.lead)?.owner
     }
     const senderHome = this.service.inboxAddressHome(message.fromAddress, true)
     return isUserAddress(message.fromAddress)
       ? message.fromAddress.slice('user:'.length)
-      : senderHome === undefined ? undefined : this.service.store.getHome(senderHome).owner
+      : senderHome === undefined ? undefined : this.service.store.findHome(senderHome)?.owner
   }
 
   private isProjectNotice(message: InboxMessage,
