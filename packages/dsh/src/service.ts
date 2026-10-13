@@ -134,7 +134,8 @@ type InboxSendInput = {
 export class BizAgentService {
   projectMainProvisioner?: (projectId: string) => Promise<{ sessionId: string }>
   private readonly liveBindings = new Map<string, SessionBinding>()
-  private readonly persistenceErrors: string[] = []
+  /** Bounded, de-duplicated runtime issues; oldest are dropped first. */
+  private readonly runtimeIssues = new Map<string, RuntimeIssue>()
   private sharedKnowledgeIndex: Array<{ id: string; scope: 'line' | 'common'; line?: string;
     description: string; path: string }> = []
   private worklogRecoveryOffset = 0
@@ -215,7 +216,7 @@ export class BizAgentService {
     const persisted = this.ledger.getBinding(sessionId)
     if (persisted !== undefined) {
       if (!this.store.hasHome(persisted.homeAddress)) {
-        this.persistenceErrors.push(`session ${sessionId}: previous Home ${persisted.homeAddress} is outside the active organization`)
+        this.addRuntimeIssue(`session ${sessionId}: previous Home ${persisted.homeAddress} is outside the active organization`)
         return undefined
       }
       this.liveBindings.set(sessionId, persisted)
@@ -231,7 +232,7 @@ export class BizAgentService {
     }
     this.liveBindings.set(sessionId, binding)
     void this.ledger.putBinding(binding).catch((error: unknown) => {
-      this.persistenceErrors.push(`binding ${sessionId}: ${errorMessage(error)}`)
+      this.addRuntimeIssue(`binding ${sessionId}: ${errorMessage(error)}`)
     })
     return binding
   }
@@ -282,7 +283,9 @@ export class BizAgentService {
       requestedOpenWorks: this.workLedger?.list().filter(work => work.requester === binding.homeAddress && ['open', 'accepted'].includes(work.status)).length ?? 0,
       episodes: this.ledger.listBindings(binding.homeAddress).length,
       worklogs: this.worklogLedger?.listLatest(binding.homeAddress).length ?? 0,
-      persistenceErrors: [...this.persistenceErrors],
+      // Only this Home's issues; others may name other Homes' Sessions, Projects, or Work.
+      persistenceErrors: this.listRuntimeIssues().filter(issue => issue.home === binding.homeAddress).map(renderRuntimeIssue),
+      otherRuntimeIssues: this.listRuntimeIssues().filter(issue => issue.home !== binding.homeAddress).length,
     }
   }
 
@@ -3553,8 +3556,26 @@ export class BizAgentService {
     await Promise.all([this.ledger.close(), this.workLedger?.close(), this.projectLedger?.close(), this.worklogLedger?.close()])
   }
 
-  recordRuntimeError(scope: string, error: unknown): void {
-    this.persistenceErrors.push(`${scope}: ${errorMessage(error)}`)
+  recordRuntimeError(scope: string, error: unknown, home?: HomeAddress): void {
+    this.addRuntimeIssue(`${scope}: ${errorMessage(error)}`, home)
+  }
+
+  /** Every recorded runtime issue, oldest first, for operators (overview health). */
+  listRuntimeIssues(): RuntimeIssue[] {
+    return [...this.runtimeIssues.values()].map(issue => ({ ...issue }))
+  }
+
+  private addRuntimeIssue(message: string, home?: HomeAddress): void {
+    const key = `${home ?? ''}\u0000${message}`
+    const now = nowIso()
+    const existing = this.runtimeIssues.get(key)
+    this.runtimeIssues.delete(key)
+    this.runtimeIssues.set(key, existing === undefined
+      ? { message, ...(home !== undefined ? { home } : {}), count: 1, firstAt: now, lastAt: now }
+      : { ...existing, count: existing.count + 1, lastAt: now })
+    while (this.runtimeIssues.size > RUNTIME_ISSUE_LIMIT) {
+      this.runtimeIssues.delete(this.runtimeIssues.keys().next().value!)
+    }
   }
 
   private async requireDurableBinding(agent: Agent): Promise<SessionBinding> {
@@ -3675,17 +3696,17 @@ export class BizAgentService {
       } catch (error) {
         // An archived, skipped, or missing target Home leaves this proposal pending; it must not
         // stop the plugin from starting.
-        this.persistenceErrors.push(`pending proposal ${proposal.id} target is unavailable: ${errorMessage(error)}`)
+        this.addRuntimeIssue(`pending proposal ${proposal.id} target is unavailable: ${errorMessage(error)}`, proposal.fromAddress)
         continue
       }
       if (asset === undefined) continue
       if (proposal.humanReview?.action !== 'accept') {
-        this.persistenceErrors.push(`pending proposal ${proposal.id} has an application without human review`)
+        this.addRuntimeIssue(`pending proposal ${proposal.id} has an application without human review`, proposal.toAddress)
         continue
       }
       if (proposal.baseAsset && (asset.id !== proposal.baseAsset.id
         || !asset.proposalApplications?.some(item => item.proposalId === proposal.id))) {
-        this.persistenceErrors.push(`pending proposal ${proposal.id} has a conflicting application marker`)
+        this.addRuntimeIssue(`pending proposal ${proposal.id} has a conflicting application marker`, proposal.toAddress)
         continue
       }
       await this.ledger.putProposal({
@@ -3711,7 +3732,7 @@ export class BizAgentService {
         && !asset.proposalApplications?.some(item => item.proposalId === proposal.id
           && item.revision === proposal.appliedAssetRevision
           && item.bodySha256 === proposal.appliedBodySha256))) {
-        this.persistenceErrors.push(`accepted proposal ${proposal.id} is missing its target asset`)
+        this.addRuntimeIssue(`accepted proposal ${proposal.id} is missing its target asset`, proposal.toAddress)
       }
     }
   }
@@ -3731,7 +3752,7 @@ export class BizAgentService {
         && document.publishedAt === proposal.humanReview.reviewedAt
       if (proposal.status === 'pending' && document) {
         if (!matches) {
-          this.persistenceErrors.push(`shared Knowledge proposal ${proposal.id} has an unreviewed publication`)
+          this.addRuntimeIssue(`shared Knowledge proposal ${proposal.id} has an unreviewed publication`, isHomeAddress(proposal.fromAddress) ? proposal.fromAddress : undefined)
           continue
         }
         await this.ledger.putSharedKnowledgeProposal({ ...proposal,
@@ -3739,7 +3760,7 @@ export class BizAgentService {
           decidedAt: proposal.humanReview!.reviewedAt })
       } else if (proposal.status === 'accepted'
         && (!matches || proposal.targetDocumentId !== documentId)) {
-        this.persistenceErrors.push(`accepted shared Knowledge proposal ${proposal.id} is missing its document`)
+        this.addRuntimeIssue(`accepted shared Knowledge proposal ${proposal.id} is missing its document`, isHomeAddress(proposal.fromAddress) ? proposal.fromAddress : undefined)
       }
     }
   }
@@ -3823,6 +3844,21 @@ function callScope(agent: Agent, callId: string): string {
     if (event.type === 'tool/call' && String(event.data.callId) === callId) return `${String(agent.id)}:${event.seq}`
   }
   return `${String(agent.id)}:${callId}`
+}
+
+export interface RuntimeIssue {
+  message: string
+  /** The Home the issue belongs to, when known; unattributed issues are shown to operators only. */
+  home?: HomeAddress
+  count: number
+  firstAt: string
+  lastAt: string
+}
+
+const RUNTIME_ISSUE_LIMIT = 50
+
+export function renderRuntimeIssue(issue: RuntimeIssue): string {
+  return issue.count > 1 ? `${issue.message} (x${issue.count}, last ${issue.lastAt})` : issue.message
 }
 
 function checkpointId(sessionId: string, turn: number): string {

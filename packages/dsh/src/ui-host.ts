@@ -13,7 +13,7 @@ import {
   parseHomeAddress,
 } from './domain.js'
 import { rejectUntrustedRequest } from './route-guard.js'
-import type { BizAgentService } from './service.js'
+import { renderRuntimeIssue, type BizAgentService } from './service.js'
 import {
   BIZAGENT_UI_API,
   BIZAGENT_AGENT_DIRECTORY_API,
@@ -111,7 +111,12 @@ export class BizAgentUiFacade {
   async overview(): Promise<UiOverview> {
     const proposals = this.service.ledger.listProposals()
     const homes = this.service.store.listHomes().map(home => this.homeSummary(home.address, proposals))
-    const health = await this.service.store.doctor()
+    const doctor = await this.service.store.doctor()
+    // Runtime issues seen in the last day count against health so operators can see them.
+    const recentSince = new Date(Date.now() - 24 * 60 * 60_000).toISOString()
+    const runtime = this.service.listRuntimeIssues().filter(issue => issue.lastAt >= recentSince)
+      .map(issue => `runtime: ${renderRuntimeIssue(issue)}`)
+    const health = { ok: doctor.ok && runtime.length === 0, issues: [...doctor.issues, ...runtime] }
     const organization = this.service.store.getOrganization()
     const organizationLocation = this.service.getActiveOrganizationLocation()
     return {
