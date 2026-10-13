@@ -27,6 +27,8 @@ Everything since `0.1.0-alpha.2`, toward the first stable release.
   mapping exists, so teammates created in the UI pick up handed-off work.
 - `timeZone` option for cron schedules and daily limits (default: the host time zone) instead of
   fixed Asia/Shanghai time.
+- Project results, assets, proposals, Worklogs, and mail in the panel are rendered as Markdown
+  with DSH's own renderer instead of raw text.
 - A Work result or reply that reaches a Session still working is read at its next step. Before, it
   waited for the next turn, so a Project chat that had already handled the result ran one more turn.
 

@@ -37,6 +37,7 @@ import type { BizAgentUiController } from './controller.js'
 import { ProjectsDashboard } from './projects.js'
 import { HumanInboxDashboard } from './human-inbox.js'
 import { SampleGuide } from './sample-guide.js'
+import { MarkdownBody } from './markdown.js'
 
 export interface BizAgentUiFace {
   controller: BizAgentUiController
@@ -1098,7 +1099,7 @@ function WorklogPanel({ detail, t }: { detail: UiHomeDetail; t: DashboardProps['
                   <span className="ba-asset-metrics">{item.files.length > 0 ? t('worklogs.files', { count: item.files.length }) : ''}</span>
                 </button>
                 {open ? <div className="ba-asset-detail">
-                  <p className="ba-detail-copy">{item.body}</p>
+                  <MarkdownBody className="ba-detail-copy" text={item.body} t={t} />
                   <div className="ba-evidence">
                     <h4>{t('worklogs.references')}</h4>
                     <code>{t('worklogs.session')}: {item.sessionId}</code>
@@ -1179,7 +1180,7 @@ function AssetRow({ api, asset, sessionId, open, onToggle, t }: {
               <IconCloseOutlineRegular size={14} />
             </button>
           </div>
-          <p className="ba-detail-copy">{asset.body}</p>
+          <MarkdownBody className="ba-detail-copy" text={asset.body} t={t} />
           <div className="ba-evidence">
             <h4>{t('asset.evidenceTitle')} · {t('asset.evidence', { count: asset.sourceRefs.length })} · {t('asset.receipts', { count: asset.receiptCount })}</h4>
             {asset.sourceRefs.map((ref, index) => <code key={`${ref.type}-${String(index)}`}>{compactEvidence(ref)}</code>)}
@@ -1351,7 +1352,7 @@ function SharedKnowledgeReviewPanel({ api, t }: { api: BizAgentUiPort; t: Dashbo
       </li>)}
     </ul>}
     {item ? <div className="ba-proposal-form">
-      <p className="ba-proposal-current-body">{item.proposal.body}</p>
+      <MarkdownBody className="ba-proposal-current-body" text={item.proposal.body} t={t} />
       <label><span className="ba-field-label">{t('proposal.decision')}</span>
         <textarea className="ba-textarea" value={decision} maxLength={4000}
           placeholder={t('proposal.decisionPlaceholder')}
@@ -1418,14 +1419,14 @@ function ProposalDecision({ proposal, targetAsset, ownerAddress, api, onDecision
             revision: proposal.baseAsset.revision })}</strong>
           {targetAsset ? <>
             <p>{t('proposal.currentVersion', { revision: targetAsset.revision })}</p>
-            <p className="ba-proposal-current-body">{targetAsset.body}</p>
+            <MarkdownBody className="ba-proposal-current-body" text={targetAsset.body} t={t} />
           </> : <p>{t('proposal.targetMissing')}</p>}
           {targetChanged ? <p role="alert">{t('proposal.targetChanged')}</p> : null}
         </div>
       ) : null}
       <div className="ba-proposal-target">
         <strong>{t('proposal.proposedBody')}</strong>
-        <p className="ba-proposal-current-body">{proposal.body}</p>
+        <MarkdownBody className="ba-proposal-current-body" text={proposal.body} t={t} />
       </div>
       {!reviewActions.accept && !reviewActions.reject ? <p>{t('proposal.reviewUnavailable')}</p> : <label>
         <span className="ba-field-label">{t('proposal.decision')}</span>

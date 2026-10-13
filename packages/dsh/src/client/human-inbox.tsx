@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { UiHumanInboxDetail, UiHumanInboxList, UiHumanInboxSummary } from '../ui-contract.js'
 import type { BizAgentUiPort } from './api.js'
+import { MarkdownBody } from './markdown.js'
 
 type T = PropsLocale<'bizagent'>['t']
 const newReplyKey = (): string => globalThis.crypto?.randomUUID?.()
@@ -138,7 +139,7 @@ export function HumanInboxDashboard({ api, t }: { api: BizAgentUiPort; t: T }) {
                   {detail.message.humanAction.href ? <a href={detail.message.humanAction.href}>
                     {detail.message.humanAction.label ?? t('humanInbox.openAction')}</a> : null}
                 </div> : null}
-                <pre className="ba-inbox-body">{detail.message.body}</pre>
+                <MarkdownBody className="ba-inbox-body" text={detail.message.body} t={t} />
                 {detail.delivery?.status === 'delivered' && !detail.delivery.handledAt
                   ? <button type="button" disabled={busy}
                     onClick={() => void act(() => api.handleHumanInbox(detail.message.id))}>

@@ -749,6 +749,7 @@ export const BIZAGENT_UI_CSS: string = `
 .ba-projects-work li, .ba-projects-seats li { display: flex; flex-wrap: wrap; gap: 8px 15px; align-items: baseline; font-size: 12px; }
 .ba-projects-work small, .ba-projects-seats small { color: var(--dsw-alias-label-caption); }
 .ba-projects-claim > p { white-space: pre-wrap; line-height: 20px; }
+.ba-projects-claim > .ba-markdown { margin-top: 10px; }
 .ba-projects-claim small { color: var(--dsw-alias-label-secondary); }
 .ba-projects-claim-evidence { display: grid; gap: 6px; margin: 12px 0; padding: 12px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); font-size: 12px; }
 .ba-projects-claim-evidence p { margin: 0; white-space: pre-wrap; line-height: 19px; }
@@ -800,6 +801,7 @@ export const BIZAGENT_UI_CSS: string = `
 .ba-inbox-reply input, .ba-inbox-reply textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: 12px var(--ba-display); }
 .ba-inbox-reply button { justify-self: start; }
 @media (max-width: 760px) { .ba-inbox-page { padding: 20px 14px 45px; }.ba-inbox-layout { grid-template-columns: 1fr; }.ba-inbox-list { border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); max-height: 250px; overflow: auto; } }
+.ba-markdown, .ba-markdown p, .ba-markdown li { white-space: normal; overflow-wrap: anywhere; }
 @keyframes ba-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes ba-rise { from { opacity: 0; transform: translateY(10px) scale(.99); } to { opacity: 1; transform: none; } }
 @keyframes ba-detail { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }

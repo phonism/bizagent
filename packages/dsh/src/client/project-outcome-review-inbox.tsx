@@ -3,6 +3,7 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { UiProjectOutcomeReviewInbox } from '../ui-contract.js'
 import type { BizAgentUiPort } from './api.js'
 import { ProjectArtifactLink } from './project-artifact-link.js'
+import { MarkdownBody } from './markdown.js'
 
 type T = PropsLocale<'bizagent'>['t']
 type Item = UiProjectOutcomeReviewInbox['items'][number]
@@ -37,7 +38,7 @@ function OutcomeCard({ item, api, t, onReviewed }: {
     <p><strong>{t('projects.goal')}:</strong> {item.goal}</p>
     <p><strong>{t('projects.doneWhen')}:</strong> {item.doneWhen}</p>
     <p><strong>{item.summary}</strong></p>
-    <p>{item.body}</p>
+    <MarkdownBody text={item.body} t={t} />
     <p><strong>{t('projects.assessment')}:</strong> {item.doneWhenAssessment}</p>
     {item.artifacts.length > 0 ? <ul>{item.artifacts.map(artifact =>
       <li key={artifact.path}><code>{artifact.path}</code> · {artifact.bytes} B · <code>{artifact.sha256.slice(0, 12)}</code>

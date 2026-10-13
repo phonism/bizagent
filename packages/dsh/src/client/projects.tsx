@@ -5,6 +5,7 @@ import type { UiProjectDetail, UiProjectList, UiProjectReviewAccess,
 import type { BizAgentUiPort } from './api.js'
 import { ProjectOutcomeReviewInbox } from './project-outcome-review-inbox.js'
 import { ProjectArtifactLink } from './project-artifact-link.js'
+import { MarkdownBody } from './markdown.js'
 
 type T = PropsLocale<'bizagent'>['t']
 type Project = UiProjectList['projects'][number]
@@ -252,10 +253,10 @@ function ProjectDetail({ detail, api, onOpenMain, t, onAccepted }: {
     {currentClaim ? <section className="ba-projects-section ba-projects-claim">
       <h5>{t('projects.claim')}</h5>
       <strong>{currentClaim.summary}</strong>
-      <p>{currentClaim.body}</p>
+      <MarkdownBody text={currentClaim.body} t={t} />
       <div className="ba-projects-claim-evidence">
         <strong>{t('projects.assessment')}</strong>
-        <p>{currentClaim.doneWhenAssessment}</p>
+        <MarkdownBody text={currentClaim.doneWhenAssessment} t={t} />
         {(currentClaim.artifacts?.length ?? 0) > 0 ? <ul>{currentClaim.artifacts?.map(item =>
           <li key={item.path}><code>{item.path}</code> · {item.bytes} B · <code>{item.sha256.slice(0, 12)}</code>
             {reviewAccess?.revision === project.revision ? <> · <ProjectArtifactLink api={api}
