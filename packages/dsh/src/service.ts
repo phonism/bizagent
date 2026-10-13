@@ -3117,6 +3117,11 @@ export class BizAgentService {
     const current = this.store.readAsset(binding.homeAddress, input.assetId)
     if (current.kind === 'identity') throw new Error('Identity requires human approval and cannot be updated automatically')
     if (!['revise', 'retire', 'publish'].includes(input.action)) throw new Error('unknown learning update action')
+    if (input.action !== 'revise'
+      && (input.description !== undefined || input.body !== undefined || input.tags !== undefined)) {
+      // Publish and retire change status only, so what becomes active is exactly the reviewed revision.
+      throw new Error(`${input.action} cannot change description, body, or tags; revise first, then ${input.action} the new revision`)
+    }
     if (input.action === 'publish') {
       if (input.expectedRevision === undefined) throw new Error('publishing requires expectedRevision from a freshly read candidate')
       if (current.status !== 'candidate') throw new Error('only a candidate can be published')

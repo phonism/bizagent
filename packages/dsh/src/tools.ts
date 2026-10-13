@@ -813,13 +813,13 @@ export function registerTools(ctx: Context, service: BizAgentService, workRunner
 
   ctx.tools.register(defineTool({
     name: 'bizagent_memory_update',
-    description: 'Revise, retire, or publish learning owned by the current Home. Revise preserves lifecycle status. Read and validate a candidate before publishing it with expected_revision.',
+    description: 'Revise, retire, or publish learning owned by the current Home. Revise preserves lifecycle status. Publish and retire change status only: revise first, then read and validate the candidate and publish that exact revision with expected_revision.',
     parameters: {
       asset_id: { type: 'string', required: true },
       action: { type: 'string', required: true, enum: ['revise', 'retire', 'publish'] },
       expected_revision: { type: 'integer', description: 'Revision returned by memory_read. Required for publish; recommended for revise/retire to reject stale edits.' },
-      description: { type: 'string', description: 'Replacement index description for revise.' },
-      body: { type: 'string', description: 'Replacement body for revise.' },
+      description: { type: 'string', description: 'Replacement index description; revise only.' },
+      body: { type: 'string', description: 'Replacement body; revise only.' },
       tags: TAGS,
     },
     output: JSON_OUTPUT,

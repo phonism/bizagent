@@ -1039,3 +1039,29 @@ test('Session evidence stays readable only from the Home its Session is bound to
   await assert.rejects(() => service.readEvidence(role, { assetId: accepted.id }),
     /not visible to the current Home/)
 })
+
+test('publish and retire cannot change the reviewed content', async t => {
+  const root = await makeTempDir('bizagent-publish-content-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const runtime = await createDemoRuntime()
+  const store = new HomeStore(root)
+  await store.initialize()
+  await store.createHome({ address: 'personal:alice', owner: 'alice' })
+  const service = new BizAgentService(store, runtime.ledger, { homeRoot: root, defaultHome: 'personal:alice',
+    autoCreateDefaultHome: false, workspaceHomes: [{ root, address: 'personal:alice' }],
+    budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 } }, runtime.sessionQuery)
+  await service.initialize()
+  const alice = runtime.agent('session-alice', root, 'Learn.')
+  const draft = await service.remember(alice, 'call-draft', { status: 'candidate', description: 'GMV rule',
+    body: 'GMV excludes cancelled orders.' })
+  const read = await service.readMemory(alice, 'call-read', draft.asset.id)
+  await assert.rejects(() => service.updateMemory(alice, { assetId: draft.asset.id, action: 'publish',
+    expectedRevision: read.asset.revision, body: 'GMV includes everything.' }), /cannot change description, body, or tags/)
+  await assert.rejects(() => service.updateMemory(alice, { assetId: draft.asset.id, action: 'publish',
+    expectedRevision: read.asset.revision, tags: ['unreviewed'] }), /cannot change/)
+  const published = await service.updateMemory(alice, { assetId: draft.asset.id, action: 'publish',
+    expectedRevision: read.asset.revision })
+  assert.equal(published.asset.body, 'GMV excludes cancelled orders.')
+  await assert.rejects(() => service.updateMemory(alice, { assetId: draft.asset.id, action: 'retire',
+    body: 'Rewritten while retiring.' }), /cannot change/)
+})
