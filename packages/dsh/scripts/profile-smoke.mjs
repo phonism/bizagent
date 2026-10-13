@@ -21,8 +21,9 @@ const humanToken = localHuman ? randomBytes(32).toString('hex') : undefined
 const humanProjectId = stableId('project', 'personal:default:profile-main')
 const humanWorkId = stableId('work', 'personal:default:profile-work')
 const humanInboxId = stableId('inbox', 'personal:default:profile-inbox')
-const lineKnowledgeProposalId = stableId('proposal', 'profile-SMOKE_PROPOSE_LINE_KNOWLEDGE')
-const commonKnowledgeProposalId = stableId('proposal', 'profile-SMOKE_PROPOSE_COMMON_KNOWLEDGE')
+// Proposal IDs are scoped to the calling Session and its tool/call event; they are derived after the call.
+let lineKnowledgeProposalId
+let commonKnowledgeProposalId
 const modelStages = new Map()
 let modelServer
 let modelPort
@@ -151,6 +152,18 @@ async function prompt(base, sessionId, marker) {
   assert.equal((await rpc(base, 'session.prompt', { sessionId, mode: 'queue',
     content: [{ type: 'text', text: marker }] })).accepted, true)
   await until(() => (modelStages.get(marker) ?? 0) >= 2, `${marker} model turn`)
+}
+
+async function scopedProposalId(base, sessionId, callId) {
+  let id
+  await until(async () => {
+    const history = await rpc(base, 'session.history', { sessionId, maxMessages: 100 })
+    const call = history.events.findLast(item => item.event.type === 'tool/call'
+      && String(item.event.data.callId) === callId)
+    id = call === undefined ? undefined : stableId('proposal', `${sessionId}:${call.event.seq}`)
+    return id !== undefined
+  }, `tool call ${callId} in ${sessionId}`)
+  return id
 }
 
 async function assertToolSucceededContaining(base, sessionId, needle, minimum = 1) {
@@ -547,8 +560,11 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
         'Verify project source evidence before an outcome claim.')
       const lineSessionId = principalSessionId('line:smoke')
       await prompt(base, lineSessionId, 'SMOKE_PROPOSE_LINE_KNOWLEDGE')
+      lineKnowledgeProposalId = await scopedProposalId(base, lineSessionId, 'profile-SMOKE_PROPOSE_LINE_KNOWLEDGE')
       await assertToolSucceededContaining(base, lineSessionId, lineKnowledgeProposalId)
       await prompt(base, principalSessionId('personal:default'), 'SMOKE_PROPOSE_COMMON_KNOWLEDGE')
+      commonKnowledgeProposalId = await scopedProposalId(base, principalSessionId('personal:default'),
+        'profile-SMOKE_PROPOSE_COMMON_KNOWLEDGE')
       await assertToolSucceededContaining(base, principalSessionId('personal:default'), commonKnowledgeProposalId)
       const sharedBeforeReview = await json(base, '/api/bizagent/shared-knowledge/decision', {
         headers: { Authorization: `Bearer ${humanToken}` },

@@ -876,7 +876,7 @@ export class BizAgentService {
   async startLearningBatch(agent: Agent, callId: string): Promise<Record<string, unknown>> {
     const binding = await this.requireDurableBinding(agent)
     if (!this.sessionQuery) throw new Error('DSH sessionQuery is unavailable')
-    const id = stableId('learning-batch', `${binding.homeAddress}:${callId}`)
+    const id = stableId('learning-batch', `${binding.homeAddress}:${callScope(agent, callId)}`)
     return this.ledger.withLearningBatchWrite(async () => {
       const previous = this.ledger.getLearningBatch(id)
       if (previous !== undefined) {
@@ -1205,7 +1205,8 @@ export class BizAgentService {
     }
     const projectId = requestedProjectId ?? replyTarget?.projectId
     const project = projectId === undefined ? undefined : this.projectLedger?.get(projectId)
-    const idempotencyKey = input.idempotencyKey ?? callId
+    const idempotencyKey = input.idempotencyKey
+      ?? (agent !== undefined ? callScope(agent, callId) : `${senderSessionId}:${callId}`)
     if (!idempotencyKey || idempotencyKey.length > 128) throw new Error('Inbox idempotency key must contain 1 to 128 characters')
     const id = stableId('inbox', `${binding.homeAddress}:${idempotencyKey}`)
     const existingForReplay = this.ledger.getInboxMessage(id)
@@ -2901,9 +2902,12 @@ export class BizAgentService {
     if (Buffer.byteLength(input.body.trim()) > 128 * 1024) {
       throw new Error('shared Knowledge body exceeds 131072 bytes')
     }
-    const id = stableId('proposal', callId)
+    const id = stableId('proposal', callScope(agent, callId))
     const existing = this.ledger.getSharedKnowledgeProposal(id)
-    if (existing) return { proposal: existing, idempotentReplay: true }
+    if (existing) {
+      if (existing.fromAddress !== binding.homeAddress) throw new Error(`shared Knowledge proposal id conflict: ${id}`)
+      return { proposal: existing, idempotentReplay: true }
+    }
     const proposal: SharedKnowledgeProposal = {
       id, fromAddress: binding.homeAddress, target,
       description: input.description.trim(), body: input.body.trim(),
@@ -3082,7 +3086,7 @@ export class BizAgentService {
     }
     if (status !== 'candidate' && status !== 'active') throw new Error('new learning must be candidate or active')
     const asset = await this.store.createAsset({
-      id: stableId(kindPrefix(kind), callId),
+      id: stableId(kindPrefix(kind), callScope(agent, callId)),
       ownerAddress: binding.homeAddress,
       kind,
       description: input.description,
@@ -3136,9 +3140,14 @@ export class BizAgentService {
       throw new Error('a same-Home observation should be remembered directly, not proposed')
     }
     if (!this.store.hasHome(toAddress)) throw new Error(`target Agent Home not found: ${toAddress}`)
-    const id = stableId('proposal', callId)
+    const id = stableId('proposal', callScope(agent, callId))
     const existing = this.ledger.getProposal(id)
-    if (existing !== undefined) return { proposal: existing, idempotentReplay: true }
+    if (existing !== undefined) {
+      if (existing.fromAddress !== binding.homeAddress || existing.toAddress !== toAddress) {
+        throw new Error(`memory proposal id conflict: ${id}`)
+      }
+      return { proposal: existing, idempotentReplay: true }
+    }
     let baseAsset: MemoryProposal['baseAsset']
     let targetKind: MutableKind | undefined
     if (input.targetAssetId !== undefined) {
@@ -3499,7 +3508,7 @@ export class BizAgentService {
     const binding = await this.requireDurableBinding(agent)
     const asset = this.store.readAsset(binding.homeAddress, input.assetId)
     const existing = this.ledger.listReceipts(asset.id).find(item => item.id === stableId('receipt',
-      `${callId}:${input.signal}:${asset.id}`))
+      `${callScope(agent, callId)}:${input.signal}:${asset.id}`))
     if (existing !== undefined) {
       if (existing.ownerAddress !== binding.homeAddress || existing.sessionId !== String(agent.id)
         || existing.signal !== input.signal || existing.outcome !== (input.outcome?.trim() || undefined)) {
@@ -3640,7 +3649,7 @@ export class BizAgentService {
   ): FitnessReceipt {
     const eventSeq = agent.session.events.at(-1)?.seq
     return {
-      id: stableId('receipt', `${callId}:${signal}:${asset.id}`),
+      id: stableId('receipt', `${callScope(agent, callId)}:${signal}:${asset.id}`),
       assetId: asset.id,
       ownerAddress,
       sessionId: String(agent.id),
@@ -3789,6 +3798,20 @@ function fitnessDelta(signal: FitnessSignal): number {
   return ({ retrieved: 0, applied: 0, confirmed: 0.2, contradicted: -0.3, failed: -0.3 } as const)[signal]
 }
 
+/**
+ * Scope for IDs derived from one tool call. Provider tool-call IDs are only unique within one model
+ * response (DSH falls back to `call-<index>`), so derived IDs use the Session and the seq of that
+ * call's durable `tool/call` event; the call ID stands in only when no such event is visible.
+ */
+function callScope(agent: Agent, callId: string): string {
+  const events = agent.session.events
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]!
+    if (event.type === 'tool/call' && String(event.data.callId) === callId) return `${String(agent.id)}:${event.seq}`
+  }
+  return `${String(agent.id)}:${callId}`
+}
+
 function checkpointId(sessionId: string, turn: number): string {
   return stableId('checkpoint', `${sessionId}:${turn}`)
 }
@@ -3882,7 +3905,8 @@ function receiptCallMatches(event: Extract<SessionEvent, { type: 'tool/call' }>,
     const args = JSON.parse(event.data.arguments) as { asset_id?: unknown; signal?: unknown }
     return args.asset_id === receipt.assetId
       && (receipt.signal === 'retrieved' || args.signal === receipt.signal)
-      && stableId('receipt', `${event.data.callId}:${receipt.signal}:${receipt.assetId}`) === receipt.id
+      && [`${receipt.sessionId}:${event.seq}`, `${receipt.sessionId}:${String(event.data.callId)}`]
+        .some(scope => stableId('receipt', `${scope}:${receipt.signal}:${receipt.assetId}`) === receipt.id)
   } catch { return false }
 }
 
