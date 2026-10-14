@@ -32,11 +32,11 @@ flowchart LR
 
 | Data | Stored in | Notes |
 | --- | --- | --- |
-| Homes: identity, assets, revisions | Home folders, as Markdown and YAML | Inside the organization folder, or `homeRoot` for the default Home. Written atomically; one bad file isolates its Home instead of stopping startup. |
+| Homes: identity, assets, revisions | Home folders, as Markdown and YAML | Organization Homes inside `~/BizAgent/orgs/<id>/`, personal Homes in `~/BizAgent` (`homeRoot`). Written atomically; one bad file isolates its Home instead of stopping startup. |
 | Organization structure | `organization.yaml`, `directory.yaml` | `directory.yaml` records each Home's owner, so editing `home.yaml` cannot change ownership. |
-| Which organization is active | `homeRoot` | A pointer to the organization folder. |
+| Which organization is active | `homeRoot` | `active-organization.yaml`, naming the organization folder. |
 | Session bindings, Frames, proposals, receipts, Inbox, learning reviews | DSH `storageDomain`, domain `bizagent` | Versioned records validated on read. |
-| Formal Work, Projects, Worklogs | DSH `storageDomain`, their own domains | Frozen artifact and Worklog file copies are stored with them. |
+| Formal Work, Projects, Worklogs | DSH `storageDomain`, their own domains | Frozen copies of their files are kept in the data folder of the Home they belong to: the organization folder, or `homeRoot` for personal Homes. |
 | Conversations | DSH sessions | Assets point at session events as evidence. |
 
 Only one DSH process may run BizAgent against the same data: startup takes a writer lock on

@@ -90,13 +90,13 @@ test('Project review downloads only an authorized, referenced and verified snaps
     const saved = await new ProjectSnapshotStore(root).retain(bytes)
     const workBytes = Buffer.from('Frozen Work result\n')
     const workSaved = await new WorkSnapshotStore(root).retain(workBytes)
-    const work = { id: 'work-1', projectId: 'project-1', status: 'completed',
+    const work = { id: 'work-1', projectId: 'project-1', status: 'completed', assignee: 'role:analyst',
       resultMessageId: 'message-1', resultArtifacts: [{ path: 'artifacts/work.md', ...workSaved }] }
     const project = { id: 'project-1', lead: 'business:search', status: 'awaiting_acceptance',
       revision: 3, currentClaimId: 'claim-1', claims: [{ id: 'claim-1',
         work: [{ id: 'work-1', status: 'completed', resultMessageId: 'message-1' }],
         artifacts: [{ path: 'artifacts/result.md', ...saved }] }] }
-    const handler = createProjectReviewHttpHandler({ store: { root },
+    const handler = createProjectReviewHttpHandler({ store: { root, rootFor: () => root },
       projectLedger: { get: () => project }, workLedger: { get: id => id === work.id ? work : undefined } }, {
       authenticateUser: req => req.headers.authorization === 'Bearer alice'
         ? { userId: 'alice' } : null,

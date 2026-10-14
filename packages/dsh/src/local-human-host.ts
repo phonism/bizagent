@@ -4,16 +4,12 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerHumanInboxRoute } from './human-inbox-transport.js'
 import { isLocalUserId } from './local-owner.js'
 import { LocalHumanCredential, readLocalHumanToken } from './local-human-token.js'
+import { workspaceRegistry } from './organization-workspace.js'
 import { registerProjectReviewRoute } from './project-review-transport.js'
 import { registerProposalReviewRoute } from './proposal-review-transport.js'
 import { dshOperatorAuthentication, guardLocalRoute } from './route-guard.js'
 import { registerSharedKnowledgeReviewRoute } from './shared-knowledge-review-transport.js'
 import { BIZAGENT_AGENT_SESSION_API, BIZAGENT_LOCAL_HUMAN_STATUS_API } from './ui-contract.js'
-
-/** The slice of DSH's host `workspaceRegistry` used to list opened Sessions in the sidebar. */
-interface WorkspaceRegistryLike {
-  create(path: string, title?: string): Promise<{ attachSession(sessionId: string): Promise<void> }>
-}
 
 export const name = 'bizagent-local-human-host'
 export const inject = ['bizagent', 'bizagentAgentSessions', 'webServer']
@@ -49,8 +45,7 @@ export async function apply(ctx: Context): Promise<void> {
   // the host, so attach them to a Workspace named after their Home, as DSH does for its own.
   const showInSidebar = async (homeAddress: string, sessionId: string): Promise<string> => {
     const path = ctx.bizagent.store.homeWorkspacePath(homeAddress)
-    const registry = (ctx as unknown as { get(name: string): unknown }).get('workspaceRegistry') as
-      WorkspaceRegistryLike | undefined
+    const registry = workspaceRegistry(ctx)
     if (registry !== undefined) {
       const workspace = await registry.create(path, ctx.bizagent.store.getHome(homeAddress).displayName)
       await workspace.attachSession(sessionId)

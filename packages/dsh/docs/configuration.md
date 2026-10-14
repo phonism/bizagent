@@ -17,9 +17,9 @@ options you change.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `homeRoot` | `$DSH_HOME/bizagent` | Where the default Home and the pointer to the active organization live. |
-| `defaultHome` | `personal:default` | Home for sessions that no other Home claims, before an organization exists. |
-| `autoCreateDefaultHome` | `true` | Create `defaultHome` on first start when no organization exists. |
+| `homeRoot` | `$BIZAGENT_HOME`, else `~/BizAgent` | BizAgent's data folder: your personal Homes, the pointer to the active organization, and organizations under `orgs/`. Data from before 1.0 at `$DSH_HOME/bizagent` keeps being used until you move it. |
+| `defaultHome` | `personal:default` | Your personal Home: it takes every session that no other Home claims, with or without an organization. |
+| `autoCreateDefaultHome` | `true` | Create `defaultHome` in `homeRoot` on first start. |
 | `defaultIdentity` | (none) | Text for the default Home's `identity.md` when BizAgent creates it. |
 | `owner` | `$BIZAGENT_LOCAL_HUMAN_ID`, else your OS user name | The person who owns Homes BizAgent creates: the default Home, organizations, and Homes added in the panel. |
 | `timeZone` | the host's time zone | IANA zone for cron schedules and daily limits, such as `Asia/Shanghai`. |
@@ -55,7 +55,8 @@ within the limits above.
 
 | Variable | Meaning |
 | --- | --- |
-| `DSH_HOME` | DSH's data directory (default `~/.dsh`). BizAgent's default `homeRoot` lives inside it. |
+| `BIZAGENT_HOME` | BizAgent's data folder when `homeRoot` is not set (default `~/BizAgent`). Isolated runs set it next to their own `DSH_HOME`. |
+| `DSH_HOME` | DSH's data directory (default `~/.dsh`). Holds sessions and BizAgent's ledgers. |
 | `BIZAGENT_LOCAL_HUMAN_ID` | Your user id for owning Homes and reviewing, if it should differ from your OS user name. Letters, digits, `.`, `_`, `-`. |
 | `BIZAGENT_LOCAL_HUMAN` | Set to `off` to disable the local review routes (Project acceptance, proposal decisions, My Inbox). |
 | `BIZAGENT_LOCAL_HUMAN_TOKEN_FILE` | A private (mode 0600) file holding a 32 to 512 character token. Scripts can then call the review routes with `Authorization: Bearer <token>`. Not needed in the browser. |

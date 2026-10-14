@@ -10,6 +10,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Config, type Config as BizAgentConfig, type ResolvedConfig, resolveConfig } from './config.js'
+import { HomeSpace } from './home-space.js'
 import { HomeStore } from './home-store.js'
 import { LearningLedger } from './ledger.js'
 import { WorkLedger } from './work-ledger.js'
@@ -98,7 +99,9 @@ export async function apply(ctx: Context, input: BizAgentConfig = {}): Promise<v
 
 async function applyLocked(ctx: Context, config: ResolvedConfig,
   activeOrganization: ActiveOrganizationLocation | undefined): Promise<void> {
-  const store = new HomeStore(activeOrganization?.organizationRoot ?? config.homeRoot)
+  // The personal space (the data root) is always loaded; the active organization sits beside it.
+  const store = new HomeSpace(new HomeStore(config.homeRoot),
+    activeOrganization === undefined ? undefined : new HomeStore(activeOrganization.organizationRoot))
   await store.initialize()
   const ledger = await LearningLedger.open(ctx.storageDomain)
   let workLedger: WorkLedger

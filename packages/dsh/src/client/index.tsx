@@ -44,6 +44,11 @@ export function apply(ctx: Context): void {
       ctx.uiWorkspace.openSession(opened.sessionId as SessionId)
       controller.close()
     },
+    openWorkspaceChat: async path => {
+      const workspace = await ctx.workspaces.create({ path })
+      await ctx.uiWorkspace.openWorkspace(workspace.workspaceId)
+      controller.close()
+    },
   })
 
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'bizagent-ui: dictionaries')

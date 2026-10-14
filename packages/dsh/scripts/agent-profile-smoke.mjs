@@ -192,7 +192,7 @@ async function headless(patch, prompt = 'Check the Home, find Analyst, open its 
   const child = spawn('dsh', ['--profile', 'headless', '--patch', patch,
     prompt], {
     cwd: packageRoot,
-    env: { ...process.env, DSH_HOME: root, DSH_TELEMETRY_DISABLED: '1',
+    env: { ...process.env, DSH_HOME: root, BIZAGENT_HOME: join(root, 'bizagent'), DSH_TELEMETRY_DISABLED: '1',
       BIZAGENT_SMOKE_KEY: 'local-only', DSH_TOOLS_MODE: 'native' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

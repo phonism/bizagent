@@ -23,6 +23,7 @@ import {
 } from './domain.js'
 import { DEFAULT_INBOX_WAKE_POLICY, InboxWakePolicySchema, type InboxWakePolicy } from './inbox-wake-policy.js'
 import { readRegularFileNoFollow, writeFileDurably } from './safe-file.js'
+import { assertKnownFormat } from './known-format.js'
 
 const DIRECTORY_SCHEMA = z.object({
   schemaVersion: z.literal(1),
@@ -573,7 +574,7 @@ export class HomeStore {
     }
     const document: unknown = YAML.parse(raw)
     // This store rewrites directory.yaml; never downgrade one written by a newer BizAgent.
-    assertKnownFormat(document, 'directory.yaml')
+    assertKnownFormat(document, 1, 'directory.yaml')
     const parsed = DIRECTORY_SCHEMA.safeParse(document)
     if (!parsed.success) {
       this.integrityIssues.push('directory.yaml is malformed; Agent Home owners were not verified')
@@ -599,7 +600,7 @@ export class HomeStore {
   private async loadHome(directory: string): Promise<HomeCache> {
     this.assertWithinRoot(directory)
     const homeRaw = YAML.parse(await readManagedText(join(directory, 'home.yaml')))
-    assertKnownFormat(homeRaw, 'home.yaml')
+    assertKnownFormat(homeRaw, 1, 'home.yaml')
     let home = AgentHomeSchema.parse(homeRaw) as AgentHome
     // home.yaml lives in the Home's writable Workspace: its identity fields must match the address.
     if (home.id !== safeHomeId(home.address)) {
@@ -665,7 +666,7 @@ export class HomeStore {
       if (isNotFound(error)) return
       throw error
     }
-    assertKnownFormat(raw, 'organization.yaml')
+    assertKnownFormat(raw, 1, 'organization.yaml')
     const organization = OrganizationSchema.parse(raw) as Organization
     const referenced = new Set<HomeAddress>([
       ...(organization.lineHome === undefined ? [] : [organization.lineHome]),
@@ -818,14 +819,6 @@ function normalizeTags(tags: string[]): string[] {
   return [...new Set(tags.map(tag => tag.trim()).filter(Boolean))].sort()
 }
 
-/** Refuse files written by a newer BizAgent with a message that says so, instead of a schema error. */
-function assertKnownFormat(raw: unknown, file: string): void {
-  const version = raw !== null && typeof raw === 'object' ? (raw as { schemaVersion?: unknown }).schemaVersion : undefined
-  if (typeof version === 'number' && version > 1) {
-    throw new Error(`${file} uses format ${version}, written by a newer BizAgent; upgrade BizAgent to read it`)
-  }
-}
-
 function normalizeId(value: string, label: string): string {
   const normalized = value.trim().toLocaleLowerCase()
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(normalized)) {
@@ -867,7 +860,7 @@ function parseAsset(raw: string, bodyPath: string): StoredAsset {
   const end = input.indexOf('\n---\n', 4)
   if (end < 0) throw new Error(`${bodyPath}: unterminated YAML frontmatter`)
   const frontmatter: unknown = YAML.parse(input.slice(4, end))
-  assertKnownFormat(frontmatter, bodyPath)
+  assertKnownFormat(frontmatter, 1, bodyPath)
   const metadata = AssetMetadataSchema.parse(frontmatter) as AssetMetadata
   const body = normalizeBody(input.slice(end + 5))
   return { ...metadata, body, bodyPath }

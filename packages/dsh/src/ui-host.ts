@@ -13,6 +13,7 @@ import {
   parseHomeAddress,
 } from './domain.js'
 import { dshOperatorAuthentication, rejectUntrustedRequest, type OperatorAuthentication } from './route-guard.js'
+import { showOrganizationWorkspace } from './organization-workspace.js'
 import { renderRuntimeIssue, type BizAgentService } from './service.js'
 import {
   BIZAGENT_UI_API,
@@ -50,7 +51,6 @@ const SafeIdSchema = z.string().trim().min(1).max(64).regex(
 )
 
 const CreateOrganizationSchema = z.object({
-  workspacePath: z.string().trim().min(1).max(4096),
   id: SafeIdSchema,
   name: z.string().trim().min(1).max(200),
   mission: z.string().trim().min(1).max(2000),
@@ -121,12 +121,13 @@ export class BizAgentUiFacade {
     const organizationLocation = this.service.getActiveOrganizationLocation()
     return {
       generatedAt: nowIso(),
-      homeRoot: this.service.store.root,
+      homeRoot: this.service.config.homeRoot,
       ...(organizationLocation === undefined ? {} : {
         organizationLocation: {
-          workspacePath: organizationLocation.workspacePath,
           organizationId: organizationLocation.organizationId,
           organizationRoot: organizationLocation.organizationRoot,
+          ...(organizationLocation.schemaVersion === 1
+            ? { legacyWorkspacePath: organizationLocation.workspacePath } : {}),
         },
       }),
       ...(organization === undefined ? {} : { organization }),
@@ -204,14 +205,14 @@ export class BizAgentUiFacade {
     return this.home(home.address)
   }
 
-  async createSampleOrganization(workspacePath: string): Promise<UiOverview> {
-    await this.service.createSampleOrganization(workspacePath)
+  async createSampleOrganization(): Promise<UiOverview> {
+    await this.service.createSampleOrganization()
     return this.overview()
   }
 
   async createOrganization(request: UiCreateOrganizationRequest): Promise<UiOverview> {
     const input = CreateOrganizationSchema.parse(request)
-    await this.service.createOrganizationInWorkspace(input)
+    await this.service.createOrganization(input)
     return this.overview()
   }
 
@@ -226,6 +227,7 @@ export class BizAgentUiFacade {
     return {
       address,
       ...(chatWorkspacePath ? { chatWorkspacePath } : {}),
+      scope: this.service.store.isPersonalHome(address) ? 'personal' : 'organization',
       type: home.type,
       displayName: home.displayName,
       revision: home.revision,
@@ -247,6 +249,9 @@ export function apply(ctx: Context, _config: Config = {}): void {
       + 'serving them on other interfaces is unsupported')
   }
   const facade = new BizAgentUiFacade(ctx.bizagent)
+  const showOrganization = () => showOrganizationWorkspace(ctx, ctx.bizagent)
+    .catch((error: unknown) => { ctx.bizagent.recordRuntimeError('organization Workspace', error) })
+  void showOrganization()
   // Every UI route also requires DSH's browser login when the host has one, so other local
   // processes (including an Agent's shell) cannot read or change Homes through this API.
   const route = (req: IncomingMessage, res: ServerResponse, method: 'GET' | 'POST',
@@ -354,22 +359,29 @@ export function apply(ctx: Context, _config: Config = {}): void {
     ctx.webServer.register({
       kind: 'exact',
       path: `${BIZAGENT_UI_API}/overview`,
-      handler: (req, res) => route(req, res, 'GET', () => facade.overview()),
+      handler: (req, res) => route(req, res, 'GET', async () => {
+        await showOrganization()
+        return facade.overview()
+      }),
     }),
     ctx.webServer.register({
       kind: 'exact',
       path: `${BIZAGENT_UI_API}/organization`,
       handler: (req, res) => route(req, res, 'POST', async () => {
         const input = CreateOrganizationSchema.parse(await readJson(req))
-        return facade.createOrganization(input)
+        const overview = await facade.createOrganization(input)
+        await showOrganization()
+        return overview
       }),
     }),
     ctx.webServer.register({
       kind: 'exact',
       path: `${BIZAGENT_UI_API}/organization/sample`,
       handler: (req, res) => route(req, res, 'POST', async () => {
-        const input = z.object({ workspacePath: z.string().trim().min(1).max(4096) }).strict().parse(await readJson(req))
-        return facade.createSampleOrganization(input.workspacePath)
+        z.object({}).strict().parse(await readJson(req))
+        const overview = await facade.createSampleOrganization()
+        await showOrganization()
+        return overview
       }),
     }),
     ctx.webServer.register({

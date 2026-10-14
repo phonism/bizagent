@@ -103,18 +103,21 @@ Every chat a step opens also appears in the DSH sidebar, in a workspace named af
 ## 5. Your own organization
 
 Instead of the sample, the four-step setup asks for a name, a mission, members with roles, and
-shared capabilities, then creates their Homes inside the DSH workspace you pick. A workspace holds
-one BizAgent organization. To start over, move or delete the `bizagent` folder in that workspace
-and restart DSH.
+shared capabilities, then creates their Homes in `~/BizAgent/orgs/<organization>/`. That folder
+appears at the top of the DSH sidebar; chats there belong to the organization. One organization is
+active at a time. To start over, delete `~/BizAgent/active-organization.yaml` (and the
+organization's folder if you no longer want it) and restart DSH.
 
-Outside an organization, every DSH session still gets a Home: `personal:default`, kept under
-`~/.dsh/bizagent`.
+Sessions anywhere else, such as in your own repositories, belong to your personal Home,
+`personal:default`, kept in `~/BizAgent`. The panel's top bar shows which Home the current chat
+belongs to, and offers **New chat in organization** when it is personal.
 
 ## Where your data lives
 
-- Homes are folders of Markdown and YAML under `<workspace>/bizagent/<organization>/homes/`. Each
-  Home folder is also the working directory of that Home's chats, so files an agent writes while
-  working (like `orders.csv`) sit next to its memory.
+- Everything BizAgent keeps on disk is in `~/BizAgent` (or `$BIZAGENT_HOME`): your personal Homes
+  under `homes/`, and each organization under `orgs/<organization>/homes/`. Homes are folders of
+  Markdown and YAML. Each Home folder is also the working directory of that Home's chats, so files
+  an agent writes while working (like `orders.csv`) sit next to its memory.
 - Session bindings, proposals, Inbox mail, Work, Projects, and Worklogs live in DSH's own storage
   under `~/.dsh`. The original conversations are DSH sessions.
 
@@ -122,7 +125,7 @@ Copying the organization folder alone is not a full backup. The `bizagent` comma
 exports and verifies Home files:
 
 ```sh
-node lib/cli.js --root <workspace>/bizagent/<organization> archive export ./homes-backup
+node lib/cli.js --root ~/BizAgent/orgs/<organization> archive export ./homes-backup
 node lib/cli.js archive verify ./homes-backup
 ```
 

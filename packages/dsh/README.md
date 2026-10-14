@@ -27,7 +27,7 @@ guided tour. The [quick start](docs/quickstart.md) covers models and troubleshoo
 ## What you get
 
 - **Homes** for personal agents, roles, shared capabilities, and the organization itself, as
-  Markdown and YAML under your DSH workspace.
+  Markdown and YAML in `~/BizAgent`.
 - **59 Agent tools** ([reference](docs/tools.md)) to remember, search, and revise assets; read
   other Homes through read-only Frames; propose lessons; send Inbox mail; dispatch and complete
   formal Work; and run Projects.

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm } from 'node:fs/promises'
+import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Readable } from 'node:stream'
@@ -212,7 +212,6 @@ test('UI facade bootstraps an organization and exposes it in the overview', asyn
   const { service, root } = await fixture(t)
   const facade = new BizAgentUiFacade(service)
   const overview = await facade.createOrganization({
-    workspacePath: `${root}/workspace`,
     id: 'acme',
     name: 'Acme Agents',
     mission: 'ship useful software with evidence.',
@@ -233,15 +232,17 @@ test('UI facade bootstraps an organization and exposes it in the overview', asyn
   assert.equal(overview.organization.name, 'Acme Agents')
   assert.equal(overview.organization.businessHome, 'business:acme')
   assert.equal(overview.organization.lineHome, 'line:acme')
-  assert.equal(overview.homeRoot, `${root}/workspace/bizagent/acme`)
+  assert.equal(overview.homeRoot, root)
   assert.deepEqual(overview.organizationLocation, {
-    workspacePath: `${root}/workspace`,
     organizationId: 'acme',
-    organizationRoot: `${root}/workspace/bizagent/acme`,
+    organizationRoot: `${root}/orgs/acme`,
   })
-  assert.equal(overview.homes.length, 5)
+  // The five organization Homes, plus the two personal-space Homes that stay outside it.
+  assert.equal(overview.homes.length, 7)
+  assert.deepEqual(overview.homes.filter(home => home.scope === 'personal').map(home => home.address),
+    ['personal:alice', 'role:growth-strategy'])
   assert.equal(overview.homes.find(home => home.address === 'business:acme').chatWorkspacePath,
-    `${root}/workspace`)
+    `${root}/orgs/acme`)
   assert.equal(overview.homes.find(home => home.address === 'role:engineering').chatWorkspacePath,
     undefined)
   assert.equal(overview.homes.find(home => home.address === 'role:engineering').displayName, 'Engineering')
@@ -487,8 +488,8 @@ function routeHarness(service, extra = {}) {
   }
 }
 
-const ORGANIZATION_REQUEST = (root, id = 'acme') => ({
-  workspacePath: `${root}/workspace`, id, name: 'Acme Agents', mission: 'ship useful software.',
+const ORGANIZATION_REQUEST = (_root, id = 'acme') => ({
+  id, name: 'Acme Agents', mission: 'ship useful software.',
   members: [{ id: 'builder', displayName: 'Builder', roleId: 'engineering', roleName: 'Engineering',
     responsibility: 'Implement and test the product.' }],
   capabilities: [],
@@ -557,7 +558,7 @@ test('UI route errors return stable codes without raw exception text or absolute
   const first = await call('/api/bizagent/v1/organization', { method: 'POST', headers, body: ORGANIZATION_REQUEST(root) })
   assert.equal(first.status, 200)
   const activeRoot = service.store.root
-  await assert.rejects(() => service.createOrganizationInWorkspace(ORGANIZATION_REQUEST(root, 'other')),
+  await assert.rejects(() => service.createOrganization(ORGANIZATION_REQUEST(root, 'other')),
     new RegExp(`organization already exists at ${activeRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
   const conflict = await call('/api/bizagent/v1/organization', { method: 'POST', headers,
     body: ORGANIZATION_REQUEST(root, 'other') })
@@ -603,18 +604,18 @@ test('the sample team is one request away and comes with its data file', async t
   const service = new BizAgentService(base.store, base.ledger, { ...base.config, owner: 'qi' })
   const call = routeHarness(service)
   const headers = { 'content-type': 'application/json', host: '127.0.0.1:4100', origin: 'http://127.0.0.1:4100' }
-  const workspacePath = `${root}/workspace`
-  await mkdir(workspacePath, { recursive: true })
-  const created = await call('/api/bizagent/v1/organization/sample', { method: 'POST', headers, body: { workspacePath } })
+  const created = await call('/api/bizagent/v1/organization/sample', { method: 'POST', headers, body: {} })
   assert.equal(created.status, 200)
   assert.equal(created.body.organization.id, 'sample-shop')
-  assert.deepEqual(created.body.homes.map(home => home.address).sort(), ['business:sample-shop', 'capability:metrics',
+  assert.equal(created.body.organizationLocation.organizationRoot, `${root}/orgs/sample-shop`)
+  const team = created.body.homes.filter(home => home.scope === 'organization')
+  assert.deepEqual(team.map(home => home.address).sort(), ['business:sample-shop', 'capability:metrics',
     'line:sample-shop', 'personal:data-analyst', 'personal:growth-lead', 'role:analytics', 'role:growth'])
-  assert.deepEqual([...new Set(service.store.listHomes().map(home => home.owner))], ['qi'])
+  assert.deepEqual([...new Set(team.map(home => service.store.getHome(home.address).owner))], ['qi'])
   const orders = await readFile(join(service.store.homeWorkspacePath('personal:data-analyst'), 'orders.csv'), 'utf8')
   assert.match(orders, /A4,refunded,60\.00/)
   // Both Homes belong to the same person, so Work between them starts on its own.
   assert.equal(service.workAutoStartBlock('personal:growth-lead', 'personal:data-analyst'), undefined)
-  const again = await call('/api/bizagent/v1/organization/sample', { method: 'POST', headers, body: { workspacePath } })
+  const again = await call('/api/bizagent/v1/organization/sample', { method: 'POST', headers, body: {} })
   assert.equal(again.status, 200)
 })

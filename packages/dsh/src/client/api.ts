@@ -60,7 +60,7 @@ export interface BizAgentUiPort {
     cron: string, dailyRuns: number): Promise<UiLearningSchedule>
   createHome(request: UiCreateHomeRequest, signal?: AbortSignal): Promise<UiHomeDetail>
   createOrganization(request: UiCreateOrganizationRequest, signal?: AbortSignal): Promise<UiOverview>
-  createSampleOrganization?(workspacePath: string, signal?: AbortSignal): Promise<UiOverview>
+  createSampleOrganization?(signal?: AbortSignal): Promise<UiOverview>
   decideProposal(request: UiProposalDecisionRequest, signal?: AbortSignal): Promise<UiHomeDetail>
   proposalReviewActions?(ownerAddress: string, proposalId: string,
     signal?: AbortSignal): Promise<{ accept: boolean; reject: boolean }>
@@ -213,11 +213,11 @@ export class BizAgentUiHttpPort implements BizAgentUiPort {
     })
   }
 
-  createSampleOrganization(workspacePath: string, signal?: AbortSignal): Promise<UiOverview> {
+  createSampleOrganization(signal?: AbortSignal): Promise<UiOverview> {
     return request(`${BIZAGENT_UI_API}/organization/sample`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspacePath }),
+      body: '{}',
       ...(signal === undefined ? {} : { signal }),
     })
   }

@@ -955,52 +955,95 @@ test('a Session binding cannot drift after it is established', async (t) => {
   assert.equal(service.bindSession('same-session', `${root}/role`).homeAddress, 'personal:alice')
 })
 
-test('creating an organization places every Home under the DSH Workspace and persists its active location', async (t) => {
+const ACME = {
+  id: 'acme',
+  name: 'Acme Agents',
+  mission: 'Ship useful software with evidence.',
+  members: [{
+    id: 'builder',
+    displayName: 'Builder',
+    roleId: 'engineering',
+    roleName: 'Engineering',
+    responsibility: 'Implement, test, and maintain the product.',
+  }],
+  capabilities: [{
+    id: 'delivery',
+    displayName: 'Product Delivery',
+    responsibility: 'Retain repeatable delivery methods.',
+  }],
+}
+
+const personalConfig = root => ({
+  homeRoot: root,
+  defaultHome: 'personal:default',
+  autoCreateDefaultHome: true,
+  workspaceHomes: [],
+  budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 },
+})
+
+test('an organization gets its own folder under orgs/ and the personal Home stays beside it', async (t) => {
   const root = await makeTempDir('bizagent-organization-location-')
   t.after(() => rm(root, { recursive: true, force: true }))
-  const workspace = `${root}/workspace`
   const store = new HomeStore(root)
   await store.initialize()
-  await store.createHome({ address: 'business:legacy' })
-  const service = new BizAgentService(store, new MemoryLedger(), {
-    homeRoot: root,
-    defaultHome: undefined,
-    autoCreateDefaultHome: false,
-    workspaceHomes: [],
-    budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 },
-  })
+  const service = new BizAgentService(store, new MemoryLedger(), personalConfig(root))
   await service.initialize()
+  assert.equal(store.hasHome('personal:default'), true)
 
-  await service.createOrganizationInWorkspace({
-    workspacePath: workspace,
-    id: 'acme',
-    name: 'Acme Agents',
-    mission: 'Ship useful software with evidence.',
-    members: [{
-      id: 'builder',
-      displayName: 'Builder',
-      roleId: 'engineering',
-      roleName: 'Engineering',
-      responsibility: 'Implement, test, and maintain the product.',
-    }],
-    capabilities: [{
-      id: 'delivery',
-      displayName: 'Product Delivery',
-      responsibility: 'Retain repeatable delivery methods.',
-    }],
-  })
+  await service.createOrganization(ACME)
 
-  const expectedRoot = `${workspace}/bizagent/acme`
-  assert.equal(service.store.root, expectedRoot)
-  assert.equal(service.store.listHomes().length, 5)
+  const organizationRoot = `${root}/orgs/acme`
+  assert.equal(service.store.organizationRoot, organizationRoot)
+  assert.equal(service.store.root, organizationRoot)
+  // Five organization Homes plus the personal Home, which stays in the data root.
+  assert.equal(service.store.listHomes().length, 6)
   assert.equal(store.hasHome('business:acme'), false)
-  assert.equal(service.bindSession('organization-session', `${workspace}/src`).homeAddress, 'business:acme')
+  assert.equal(service.store.isPersonalHome('personal:default'), true)
+  assert.equal(service.store.isPersonalHome('business:acme'), false)
+  assert.equal(service.store.rootFor('personal:default'), root)
+  assert.equal(service.store.rootFor('role:engineering'), organizationRoot)
   assert.deepEqual(await loadActiveOrganizationLocation(root), service.getActiveOrganizationLocation())
+  assert.equal(service.getActiveOrganizationLocation().schemaVersion, 2)
+  assert.equal(service.chatWorkspacePath('business:acme'), organizationRoot)
 
-  const reloaded = new HomeStore(expectedRoot)
+  // Inside a Home folder: that Home. Elsewhere in the organization folder: the Business Home.
+  // Anywhere else: the personal Home, never the organization.
+  const roleFolder = service.store.homeWorkspacePath('role:engineering')
+  assert.equal(service.bindSession('in-role', `${roleFolder}/notes`).homeAddress, 'role:engineering')
+  assert.equal(service.bindSession('in-organization', organizationRoot).homeAddress, 'business:acme')
+  assert.equal(service.bindSession('in-repository', `${root}/../some-repository`).homeAddress, 'personal:default')
+  assert.equal(service.bindSession('no-folder').homeAddress, 'personal:default')
+
+  const reloaded = new HomeStore(organizationRoot)
   await reloaded.initialize()
   assert.equal(reloaded.getOrganization().id, 'acme')
   assert.equal(reloaded.getHome('role:engineering').displayName, 'Engineering')
+})
+
+test('Business Home bindings outside the organization folder are released at startup', async (t) => {
+  const root = await makeTempDir('bizagent-stray-bindings-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const first = new BizAgentService(new HomeStore(root), new MemoryLedger(), personalConfig(root))
+  await first.store.initialize()
+  await first.initialize()
+  await first.createOrganization(ACME)
+  const organizationRoot = first.store.organizationRoot
+  const ledger = new MemoryLedger()
+  await ledger.putBinding({ sessionId: 'coding', homeAddress: 'business:acme', cwd: `${root}/../repository`,
+    boundAt: '2026-01-01T00:00:00Z' })
+  await ledger.putBinding({ sessionId: 'organization', homeAddress: 'business:acme', cwd: organizationRoot,
+    boundAt: '2026-01-01T00:00:01Z' })
+  ledger.releaseBinding = async binding => ledger.bindings.delete(binding.sessionId)
+
+  const { HomeSpace } = await import('../lib/home-space.js')
+  const space = new HomeSpace(new HomeStore(root), new HomeStore(organizationRoot))
+  await space.initialize()
+  const restarted = new BizAgentService(space, ledger, personalConfig(root))
+  await restarted.initialize()
+
+  assert.equal(ledger.getBinding('coding'), undefined)
+  assert.equal(ledger.getBinding('organization').homeAddress, 'business:acme')
+  assert.equal(restarted.bindSession('coding', `${root}/../repository`).homeAddress, 'personal:default')
 })
 
 test('Session evidence stays readable only from the Home its Session is bound to', async t => {

@@ -60,7 +60,7 @@ function launch() {
   const child = spawn('dsh', ['--profile', 'web', ...(pluginAddTarball ? [] : ['--patch', patch]),
     '--host', '127.0.0.1', '--port', '0', '--no-open'], {
     cwd: runtimeCwd,
-    env: { ...process.env, DSH_HOME: root, DSH_TELEMETRY_DISABLED: '1' },
+    env: { ...process.env, DSH_HOME: root, BIZAGENT_HOME: join(root, 'bizagent'), DSH_TELEMETRY_DISABLED: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
@@ -318,7 +318,7 @@ try {
     const args = ['plugin', '--profile', 'web', 'add', resolve(pluginAddTarball)]
     if (process.env.npm_config_offline === 'true') args.push('--offline')
     const installOptions = { cwd: runtimeCwd,
-      env: { ...process.env, DSH_HOME: root,
+      env: { ...process.env, DSH_HOME: root, BIZAGENT_HOME: join(root, 'bizagent'),
         PATH: `${join(packageRoot, 'node_modules', '.bin')}:${process.env.PATH ?? ''}` } }
     await run('dsh', args, installOptions)
     const profile = JSON.parse(await readFile(join(root, 'profiles', 'web', 'package.json'), 'utf8'))

@@ -43,6 +43,8 @@ export interface BizAgentUiFace {
   controller: BizAgentUiController
   api: BizAgentUiPort
   openAgentSession: (input: { homeAddress: string } | { projectId: string }) => Promise<void>
+  /** Start a new chat in the DSH Workspace for this folder, adding the Workspace if needed. */
+  openWorkspaceChat: (path: string) => Promise<void>
 }
 
 type LauncherProps = PropsRuntime<'sidebar.footer.action'>
@@ -101,7 +103,7 @@ export function BizAgentLauncher({ wide, controller, api, t }: LauncherProps) {
   )
 }
 
-export function BizAgentDashboard({ controller, api, openAgentSession, t, useSessions, useWorkspaces }: DashboardProps) {
+export function BizAgentDashboard({ controller, api, openAgentSession, openWorkspaceChat, t, useSessions, useWorkspaces }: DashboardProps) {
   const open = useSyncExternalStore(controller.subscribe, controller.getSnapshot).open
   // The Session shown in the main view is the one the main view retains (as DSH itself derives it).
   const currentSessionId = useSessions(state => mainViewSession(state.byId)?.id)
@@ -127,6 +129,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
   const [localHumanBusy, setLocalHumanBusy] = useState(false)
   const [localHumanEpoch, setLocalHumanEpoch] = useState(0)
   const [view, setView] = useState<DashboardView>('organization')
+  const [sessionHome, setSessionHome] = useState<{ address: string; displayName: string }>()
 
   const load = async (preferred?: string, signal?: AbortSignal): Promise<void> => {
     const nextOverview = await api.overview(signal)
@@ -156,6 +159,16 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
       .finally(() => { if (!abort.signal.aborted) setLoading(false) })
     return () => { abort.abort() }
   }, [open])
+
+  // Which Home the chat in the main view belongs to, as the host resolves it.
+  useEffect(() => {
+    if (!open || currentSessionId === undefined) { setSessionHome(undefined); return }
+    const abort = new AbortController()
+    void api.frameParticipation(String(currentSessionId), abort.signal)
+      .then(participation => { if (!abort.signal.aborted) setSessionHome(participation.primaryHome) })
+      .catch(() => { if (!abort.signal.aborted) setSessionHome(undefined) })
+    return () => { abort.abort() }
+  }, [api, currentSessionId, open, overview?.generatedAt])
 
   useEffect(() => {
     if (!open || api.localHumanStatus === undefined) return
@@ -229,6 +242,12 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
 
   if (!open) return null
 
+  const sessionSummary = sessionHome === undefined ? undefined
+    : overview?.homes.find(home => home.address === sessionHome.address)
+  const sessionScope = sessionSummary?.scope
+  const sessionType = sessionSummary?.type
+  const organizationRoot = overview?.organization !== undefined ? overview.organizationLocation?.organizationRoot : undefined
+
   const selectHome = async (address: string): Promise<void> => {
     if (address === selectedAddress && detail !== undefined) return
     setSelectedAddress(address)
@@ -301,34 +320,34 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
             <p className="ba-subtitle">{t('dashboard.subtitle')}</p>
           </div>
           <nav className="ba-view-tabs" aria-label={t('nav.aria')}>
+            <button type="button" data-active={view === 'organization' ? 'true' : 'false'} onClick={() => { setView('organization') }}>
+              {t('nav.organization')}
+            </button>
+            <button type="button" data-active={view === 'learning' ? 'true' : 'false'} onClick={() => { setView('learning') }}>
+              {t('nav.learning')}
+            </button>
             {overview?.organization !== undefined ? (
-              <>
-              <button type="button" data-active={view === 'organization' ? 'true' : 'false'} onClick={() => { setView('organization') }}>
-                {t('nav.organization')}
-              </button>
-              <button type="button" data-active={view === 'learning' ? 'true' : 'false'} onClick={() => { setView('learning') }}>
-                {t('nav.learning')}
-              </button>
               <button type="button" data-active={view === 'projects' ? 'true' : 'false'} onClick={() => { setView('projects') }}>
                 {t('nav.projects')}
               </button>
-              </>
             ) : null}
             <button type="button" data-active={view === 'humanInbox' ? 'true' : 'false'} onClick={() => { setView('humanInbox') }}>
               {t('nav.humanInbox')}
             </button>
           </nav>
           <div className="ba-top-actions">
-            {overview !== undefined && currentWorkspace !== undefined ? (
-              <span className="ba-current-location">
-                <strong>{currentWorkspace.title}</strong>
-                <span>/</span>
-                <code>{samePath(overview.organizationLocation?.workspacePath, currentWorkspace.path)
-                  // A Home's own Workspace lies inside the organization directory.
-                  || (overview.organizationLocation !== undefined
-                    && pathContains(overview.organizationLocation.organizationRoot, currentWorkspace.path))
-                  ? `bizagent/${overview.organization?.id ?? ''}` : t('workspace.noOrganization')}</code>
+            {sessionHome !== undefined ? (
+              <span className="ba-current-location" data-scope={sessionScope ?? 'organization'}
+                title={`${t('session.belongs')} ${sessionHome.address}`}>
+                <strong>{sessionScope === 'personal' ? t('session.personal') : sessionHome.displayName}</strong>
+                <code>{sessionScope === 'personal' ? t('session.outside')
+                  : sessionType !== undefined ? t(`type.${sessionType}` as 'type.business') : sessionHome.address}</code>
               </span>
+            ) : null}
+            {organizationRoot !== undefined && sessionScope === 'personal' ? (
+              <button type="button" className="ba-button" onClick={() => { void openWorkspaceChat(organizationRoot) }}>
+                {t('session.newInOrganization')}
+              </button>
             ) : null}
             {overview !== undefined ? (
               <span className="ba-health" data-ok={overview.health.ok ? 'true' : 'false'}>
@@ -389,11 +408,10 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
         ) : view === 'projects' && overview !== undefined ? (
           <ProjectsDashboard key={`${currentSessionId ?? 'none'}:${localHumanEpoch}`} api={api}
             sessionId={currentSessionId} onOpenMain={projectId => openAgentSession({ projectId })} t={t} />
-        ) : overview !== undefined && overview.organization === undefined ? (
+        ) : view === 'organization' && overview !== undefined && overview.organization === undefined ? (
           <OrganizationSetup
             api={api}
-            workspaces={workspaces}
-            currentWorkspacePath={currentWorkspace?.path}
+            homeRoot={overview.homeRoot}
             onCreated={onOrganizationCreated}
             t={t}
           />
@@ -461,10 +479,9 @@ export function BizAgentDashboard({ controller, api, openAgentSession, t, useSes
 type MemberDraft = UiCreateOrganizationRequest['members'][number]
 type CapabilityDraft = UiCreateOrganizationRequest['capabilities'][number]
 
-function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t }: {
+function OrganizationSetup({ api, homeRoot, onCreated, t }: {
   api: BizAgentUiPort
-  workspaces: readonly WorkspaceView[]
-  currentWorkspacePath: string | undefined
+  homeRoot: string
   onCreated: (overview: UiOverview) => Promise<void>
   t: DashboardProps['t']
 }) {
@@ -476,7 +493,6 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
   const [members, setMembers] = useState<MemberDraft[]>(() => teamTemplate('product', t).members)
   const [capabilities, setCapabilities] = useState<CapabilityDraft[]>(() => teamTemplate('product', t).capabilities)
   const [template, setTemplate] = useState('product')
-  const [organizationWorkspace, setOrganizationWorkspace] = useState(currentWorkspacePath ?? workspaces[0]?.path ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
@@ -507,11 +523,11 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
   }
 
   const createSample = async (): Promise<void> => {
-    if (api.createSampleOrganization === undefined || organizationWorkspace === '' || busy) return
+    if (api.createSampleOrganization === undefined || busy) return
     setBusy(true)
     setError(undefined)
     try {
-      await onCreated(await api.createSampleOrganization(organizationWorkspace))
+      await onCreated(await api.createSampleOrganization())
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
@@ -520,12 +536,11 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
   }
 
   const submit = async (): Promise<void> => {
-    if (!validBasics || !validMembers || !validCapabilities || organizationWorkspace === '' || busy) return
+    if (!validBasics || !validMembers || !validCapabilities || busy) return
     setBusy(true)
     setError(undefined)
     try {
       const nextOverview = await api.createOrganization({
-        workspacePath: organizationWorkspace,
         id,
         name: name.trim(),
         mission: mission.trim(),
@@ -580,7 +595,7 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
                   <p>{t('setup.sample.body')}</p>
                 </div>
                 <button type="button" className="ba-button" data-variant="primary"
-                  disabled={busy || organizationWorkspace === ''} onClick={() => { void createSample() }}>
+                  disabled={busy} onClick={() => { void createSample() }}>
                   {t('setup.sample.action')}
                 </button>
                 {error !== undefined ? <p className="ba-inline-error" role="alert">{t('setup.failed', { message: error })}</p> : null}
@@ -668,20 +683,10 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
             <p className="ba-stage-number">04 / 04</p>
             <h3>{t('setup.directory.title')}</h3>
             <p className="ba-stage-lead">{t('setup.directory.lead')}</p>
-            {workspaces.length === 0 ? (
-              <div className="ba-location-empty">{t('setup.directory.empty')}</div>
-            ) : (
-              <div className="ba-setup-location">
-                <label className="ba-form-field">
-                  <span className="ba-field-label">{t('workspace.name')}</span>
-                  <select className="ba-select" value={organizationWorkspace} onChange={(event) => { setOrganizationWorkspace(event.target.value) }}>
-                    {workspaces.map(workspace => <option value={workspace.path} key={workspace.workspaceId}>{workspace.title}</option>)}
-                  </select>
-                  <code>{organizationWorkspace}</code>
-                </label>
-                <OrganizationPathTree workspacePath={organizationWorkspace} organizationId={id} t={t} />
-              </div>
-            )}
+            <div className="ba-setup-location">
+              <OrganizationPathTree base={homeRoot} organizationId={id} t={t} />
+              <code>{`${normalizedClientPath(homeRoot)}/orgs/${id || 'organization-id'}`}</code>
+            </div>
             <p className="ba-location-note">{t('setup.directory.note')}</p>
             {error !== undefined ? <p className="ba-inline-error" role="alert">{t('setup.failed', { message: error })}</p> : null}
           </div>
@@ -693,7 +698,7 @@ function OrganizationSetup({ api, workspaces, currentWorkspacePath, onCreated, t
               {t('setup.continue')}
             </button>
           ) : (
-            <button type="submit" className="ba-button" data-variant="primary" disabled={organizationWorkspace === '' || busy}>
+            <button type="submit" className="ba-button" data-variant="primary" disabled={busy}>
               {busy ? t('setup.creating') : t('setup.create')}
             </button>
           )}
@@ -724,7 +729,7 @@ function OrganizationOverview({ overview, currentWorkspacePath, onOpenHome, onOp
     ...organization.members.flatMap(member => [member.personalHome, member.roleHome]),
     ...organization.capabilityHomes,
   ])
-  const unassigned = overview.homes.filter(home => !assigned.has(home.address))
+  const unassigned = overview.homes.filter(home => home.scope === 'organization' && !assigned.has(home.address))
 
   return (
     <main className="ba-org-shell">
@@ -811,6 +816,8 @@ function OrganizationDirectory({ overview, currentWorkspacePath, t }: {
   t: DashboardProps['t']
 }) {
   const location = overview.organizationLocation
+  const inside = location !== undefined && currentWorkspacePath !== undefined
+    && pathContains(location.organizationRoot, currentWorkspacePath)
 
   return (
     <section className="ba-organization-location" aria-labelledby="ba-organization-location-title">
@@ -824,11 +831,15 @@ function OrganizationDirectory({ overview, currentWorkspacePath, t }: {
       {location === undefined ? (
         <div className="ba-location-empty">{t('location.legacy', { path: overview.homeRoot })}</div>
       ) : (
-        <div className="ba-location-content" data-current={samePath(location.workspacePath, currentWorkspacePath) ? 'true' : 'false'}>
-          <OrganizationPathTree workspacePath={location.workspacePath} organizationId={location.organizationId} t={t} />
+        <div className="ba-location-content" data-current={inside ? 'true' : 'false'}>
+          {location.legacyWorkspacePath !== undefined
+            ? <OrganizationPathTree base={location.legacyWorkspacePath} legacy organizationId={location.organizationId} t={t} />
+            : <OrganizationPathTree base={overview.homeRoot} organizationId={location.organizationId} t={t} />}
           <div className="ba-location-facts">
-            <span>{samePath(location.workspacePath, currentWorkspacePath) ? t('location.current') : t('location.otherWorkspace')}</span>
+            <span>{inside ? t('location.current') : t('location.elsewhere')}</span>
             <code>{location.organizationRoot}</code>
+            {location.legacyWorkspacePath !== undefined
+              ? <small>{t('location.legacyPlace', { path: `${normalizedClientPath(overview.homeRoot)}/orgs/` })}</small> : null}
           </div>
         </div>
       )}
@@ -836,15 +847,19 @@ function OrganizationDirectory({ overview, currentWorkspacePath, t }: {
   )
 }
 
-function OrganizationPathTree({ workspacePath, organizationId, t }: {
-  workspacePath: string
+/** `<data root>/orgs/<id>`, or the pre-1.0 `<workspace>/bizagent/<id>` for a legacy organization. */
+function OrganizationPathTree({ base, legacy = false, organizationId, t }: {
+  base: string
+  legacy?: boolean
   organizationId: string
   t: DashboardProps['t']
 }) {
   return (
     <div className="ba-path-tree" aria-label={t('location.tree')}>
-      <div data-level="0"><span className="ba-folder-mark" /> <strong>{workspaceName(workspacePath)}</strong><small>{t('location.workspace')}</small></div>
-      <div data-level="1"><span className="ba-folder-mark" /> <strong>bizagent</strong><small>{t('location.container')}</small></div>
+      <div data-level="0"><span className="ba-folder-mark" /> <strong>{workspaceName(base)}</strong>
+        <small>{legacy ? t('location.workspace') : t('location.dataRoot')}</small></div>
+      <div data-level="1"><span className="ba-folder-mark" /> <strong>{legacy ? 'bizagent' : 'orgs'}</strong>
+        <small>{legacy ? t('location.container') : t('location.orgs')}</small></div>
       <div data-level="2"><span className="ba-folder-mark" data-active="true" /> <strong>{organizationId || 'organization-id'}</strong><small>{t('location.organization')}</small></div>
     </div>
   )
@@ -867,27 +882,33 @@ function HomeDirectory({ homes, selected, onSelect, onCreate, t }: {
         <IconPlusOutlineRegular size={14} />
         {t('directory.create')}
       </button>
-      {homes.length === 0 ? <EmptyState title={t('directory.empty')} hint="" /> : (
-        <ul className="ba-home-list">
-          {homes.map(home => (
-            <li key={home.address}>
-              <button
-                type="button"
-                className="ba-home-button"
-                data-active={home.address === selected ? 'true' : 'false'}
-                onClick={() => { onSelect(home.address) }}
-              >
-                <span className="ba-home-type-dot" data-type={home.type} aria-hidden="true" />
-                <span className="ba-home-copy">
-                  <span className="ba-home-name">{home.displayName}</span>
-                  <span className="ba-home-address">{home.address} · r{home.revision}</span>
-                </span>
-                {home.incomingPending > 0 ? <span className="ba-home-badge">{home.incomingPending}</span> : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {homes.length === 0 ? <EmptyState title={t('directory.empty')} hint="" /> : [
+        { label: t('directory.personal'), items: homes.filter(home => home.scope === 'personal') },
+        { label: t('directory.organization'), items: homes.filter(home => home.scope === 'organization') },
+      ].filter(group => group.items.length > 0).map(group => (
+        <section className="ba-home-group" key={group.label}>
+          <h4 className="ba-home-group-title">{group.label}</h4>
+          <ul className="ba-home-list">
+            {group.items.map(home => (
+              <li key={home.address}>
+                <button
+                  type="button"
+                  className="ba-home-button"
+                  data-active={home.address === selected ? 'true' : 'false'}
+                  onClick={() => { onSelect(home.address) }}
+                >
+                  <span className="ba-home-type-dot" data-type={home.type} aria-hidden="true" />
+                  <span className="ba-home-copy">
+                    <span className="ba-home-name">{home.displayName}</span>
+                    <span className="ba-home-address">{home.address} · r{home.revision}</span>
+                  </span>
+                  {home.incomingPending > 0 ? <span className="ba-home-badge">{home.incomingPending}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
     </aside>
   )
 }
@@ -1668,11 +1689,6 @@ function currentDshWorkspace(
 function workspaceName(path: string): string {
   const parts = normalizedClientPath(path).split('/').filter(Boolean)
   return parts.at(-1) ?? path
-}
-
-function samePath(left?: string, right?: string): boolean {
-  if (left === undefined || right === undefined) return false
-  return normalizedClientPath(left) === normalizedClientPath(right)
 }
 
 function pathContains(root: string, target: string): boolean {

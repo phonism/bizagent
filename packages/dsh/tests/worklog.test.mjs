@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { HomeStore } from '../lib/home-store.js'
@@ -252,4 +252,41 @@ test('ordinary substantive Session turns create an evolving Worklog and recover 
   await assert.rejects(() => restarted.readWorklog(bob, { sessionId: alice.id }), /not visible/)
   await restarted.worklogLedger.close()
   await service.close()
+})
+
+test('with an organization active, each Home keeps its Worklog snapshots in its own folder', async (t) => {
+  const root = await makeTempDir('bizagent-worklog-spaces-')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const runtime = await createDemoRuntime()
+  const config = {
+    homeRoot: root, defaultHome: 'personal:default', autoCreateDefaultHome: true, workspaceHomes: [],
+    budget: { identityMaxBytes: 1024, indexMaxBytes: 2048 },
+  }
+  const service = new BizAgentService(new HomeStore(root), runtime.ledger, config, runtime.sessionQuery,
+    undefined, undefined, runtime.workLedger, runtime.projectLedger, runtime.worklogLedger)
+  await service.store.initialize()
+  await service.initialize()
+  await service.createOrganization({ id: 'acme', name: 'Acme', mission: 'Ship.', capabilities: [],
+    members: [{ id: 'builder', displayName: 'Builder', roleId: 'engineering', roleName: 'Engineering',
+      responsibility: 'Build.' }] })
+  const organizationRoot = service.store.organizationRoot
+  const repository = join(root, 'repository')
+  await mkdir(repository)
+  await writeFile(join(repository, 'notes.md'), 'personal notes\n')
+  await writeFile(join(organizationRoot, 'plan.md'), 'team plan\n')
+  const personal = runtime.agent('personal-log', repository, 'Take notes.')
+  const team = runtime.agent('team-log', organizationRoot, 'Plan the quarter.')
+  const input = { description: 'Saved', body: 'Saved the file.', status: 'completed' }
+
+  const mine = (await service.recordWorklog(personal, { ...input, idempotencyKey: 'mine', files: ['notes.md'] })).worklog
+  const theirs = (await service.recordWorklog(team, { ...input, idempotencyKey: 'team', files: ['plan.md'] })).worklog
+  assert.equal(mine.homeAddress, 'personal:default')
+  assert.equal(theirs.homeAddress, 'business:acme')
+  const exists = path => stat(path).then(() => true, () => false)
+  assert.equal(await exists(join(root, worklogSnapshotPath(mine.files[0].sha256))), true)
+  assert.equal(await exists(join(organizationRoot, worklogSnapshotPath(mine.files[0].sha256))), false)
+  assert.equal(await exists(join(organizationRoot, worklogSnapshotPath(theirs.files[0].sha256))), true)
+  assert.equal(await exists(join(root, worklogSnapshotPath(theirs.files[0].sha256))), false)
+  const page = await service.readWorklogFile(personal, { sessionId: personal.id, path: 'notes.md' })
+  assert.equal(Buffer.from(page.contentBase64, 'base64').toString(), 'personal notes\n')
 })

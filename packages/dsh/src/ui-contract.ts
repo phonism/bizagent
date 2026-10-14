@@ -91,6 +91,8 @@ export interface UiHomeSummary {
   address: HomeAddress
   /** Host-known Workspace for an explicitly bound Business Home chat. */
   chatWorkspacePath?: string
+  /** `personal` for the person's own Homes in the data root, outside any organization. */
+  scope: 'personal' | 'organization'
   type: HomeType
   displayName: string
   revision: number
@@ -149,11 +151,13 @@ export interface UiHomeDetail {
 
 export interface UiOverview {
   generatedAt: string
+  /** BizAgent data root: the personal space, with organizations under `orgs/`. */
   homeRoot: string
   organizationLocation?: {
-    workspacePath: string
     organizationId: string
     organizationRoot: string
+    /** Set for an organization still at its pre-1.0 place, `<workspace>/bizagent/<id>`. */
+    legacyWorkspacePath?: string
   }
   organization?: Organization
   homes: UiHomeSummary[]
@@ -179,7 +183,6 @@ export interface UiCreateHomeRequest {
 }
 
 export interface UiCreateOrganizationRequest {
-  workspacePath: string
   id: string
   name: string
   mission: string

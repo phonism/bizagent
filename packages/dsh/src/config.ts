@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import Schema from '@deepseek-ai/schemastery'
@@ -39,7 +40,9 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  homeRoot: Schema.string().description('BizAgent data root. Defaults to $DSH_HOME/bizagent.'),
+  homeRoot: Schema.string().description(
+    'BizAgent data root: your personal Homes, and your organizations under orgs/. '
+    + 'Defaults to $BIZAGENT_HOME or ~/BizAgent.'),
   defaultHome: Schema.string().default('personal:default'),
   defaultIdentity: Schema.string(),
   autoCreateDefaultHome: Schema.boolean().default(true),
@@ -76,9 +79,7 @@ export interface ResolvedConfig {
 }
 
 export function resolveConfig(input: Config = {}): ResolvedConfig {
-  const dshRoot = process.env['DSH_HOME']?.trim() || join(homedir(), '.dsh')
-  const configuredRoot = input.homeRoot?.trim() || join(dshRoot, 'bizagent')
-  const homeRoot = resolve(expandHome(configuredRoot))
+  const homeRoot = resolve(expandHome(input.homeRoot?.trim() || defaultHomeRoot()))
   const defaultHome = input.defaultHome?.trim()
     ? parseHomeAddress(input.defaultHome.trim())
     : undefined
@@ -140,6 +141,18 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     timeZone,
     owner,
   }
+}
+
+/**
+ * `$BIZAGENT_HOME`, else `~/BizAgent`. Data written before the data root moved, at
+ * `$DSH_HOME/bizagent`, keeps being used until it is moved, so upgrading never hides it.
+ */
+export function defaultHomeRoot(): string {
+  const configured = process.env['BIZAGENT_HOME']?.trim()
+  if (configured) return expandHome(configured)
+  const current = join(homedir(), 'BizAgent')
+  const legacy = join(process.env['DSH_HOME']?.trim() || join(homedir(), '.dsh'), 'bizagent')
+  return !existsSync(current) && existsSync(join(legacy, 'directory.yaml')) ? legacy : current
 }
 
 function expandHome(path: string): string {

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
+import { defaultHomeRoot } from './config.js'
 import { HomeStore } from './home-store.js'
 import { exportHomeArchive, importHomeArchive, verifyHomeArchive } from './home-archive.js'
 
@@ -115,8 +115,7 @@ function parseGlobalOptions(argv: string[]): { root: string; args: string[] } {
       result.push(value)
     }
   }
-  const dshRoot = process.env['DSH_HOME']?.trim() || join(homedir(), '.dsh')
-  return { root: resolve(root ?? join(dshRoot, 'bizagent')), args: result }
+  return { root: resolve(root ?? defaultHomeRoot()), args: result }
 }
 
 function option(argv: string[], name: string): string | undefined {

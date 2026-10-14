@@ -30,17 +30,28 @@ Each Home has an **owner**, the person allowed to change it from outside: accept
 it, accept the Projects it leads, and let other Homes start work in it. In the local setup you own
 every Home BizAgent creates.
 
-An **organization** is a set of Homes created together in one DSH workspace, under
-`<workspace>/bizagent/<organization-id>/`. Outside an organization, sessions use the default Home
-`personal:default`.
+An **organization** is a set of Homes created together in their own folder,
+`~/BizAgent/orgs/<organization-id>/`. That folder is also a DSH workspace: BizAgent adds it to the
+top of the sidebar, named after the organization.
+
+Your **personal Home**, `personal:default`, lives next to organizations in `~/BizAgent`, not inside
+one. It is there whether or not an organization exists, and organization agents cannot read it.
 
 ## Sessions and Homes
 
 Each DSH session is bound to exactly one Home, once, when it starts. The binding follows the
-session's working directory: a session in a Home's folder belongs to that Home. Any other session
-belongs to `personal:default` before you create an organization, and to the organization's
-business Home after. **Chat** on a Home in the BizAgent panel opens that Home's long-term chat,
-its *Principal*.
+session's working directory:
+
+1. In a Home's folder (or a folder mapped with `workspaceHomes`): that Home.
+2. Anywhere else in the organization folder: the organization's business Home.
+3. Anywhere else, such as your own code repositories: your personal Home. Work outside the
+   organization never lands in the organization's memory.
+
+**Chat** on a Home in the BizAgent panel opens that Home's long-term chat, its *Principal*.
+
+From your personal Home you can still use the organization: open a read-only Frame on one of its
+shared Homes, propose a lesson to it (the organization reviews it), or hand it a task by mail,
+formal Work, or a Project you lead.
 
 At the start of a session the agent receives:
 

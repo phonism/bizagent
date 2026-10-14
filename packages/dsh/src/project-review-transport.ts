@@ -71,11 +71,11 @@ export function createProjectReviewHttpHandler(service: BizAgentService,
             const artifact = work?.projectId === project.id && work.status === 'completed'
               && work.resultMessageId === reference?.resultMessageId
               ? work.resultArtifacts?.find(item => item.path === artifactPath) : undefined
-            if (!reference || !artifact) {
+            if (!reference || !artifact || !work) {
               reply(res, 404, failure('artifact-unavailable', 'Work artifact is unavailable.'))
               return
             }
-            const bytes = await new WorkSnapshotStore(service.store.root)
+            const bytes = await new WorkSnapshotStore(service.store.rootFor(work.assignee))
               .read(artifact.sha256, artifact.bytes)
             res.setHeader('Content-Type', 'application/octet-stream')
             res.setHeader('Content-Disposition', 'attachment; filename="work-artifact"')
@@ -89,7 +89,7 @@ export function createProjectReviewHttpHandler(service: BizAgentService,
             reply(res, 404, failure('artifact-unavailable', 'Project artifact is unavailable.'))
             return
           }
-          const bytes = await new ProjectSnapshotStore(service.store.root)
+          const bytes = await new ProjectSnapshotStore(service.store.rootFor(project.lead))
             .read(artifact.sha256, artifact.bytes)
           res.setHeader('Content-Type', 'application/octet-stream')
           res.setHeader('Content-Disposition', 'attachment; filename="project-artifact"')

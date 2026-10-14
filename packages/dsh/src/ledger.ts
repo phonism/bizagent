@@ -118,6 +118,14 @@ export class LearningLedger {
     return this.domain.table('bindings').delete(binding.sessionId)
   }
 
+  /** Forget a binding the current rules no longer make, so its Session binds afresh on its next turn. */
+  async releaseBinding(binding: SessionBinding): Promise<boolean> {
+    const current = this.getBinding(binding.sessionId)
+    if (current?.homeAddress !== binding.homeAddress || current.cwd !== binding.cwd
+      || current.boundAt !== binding.boundAt) return false
+    return this.domain.table('bindings').delete(binding.sessionId)
+  }
+
   listBindings(homeAddress?: string): SessionBinding[] {
     return [...this.domain.table('bindings').entries()]
       .map(([, binding]) => binding as SessionBinding)

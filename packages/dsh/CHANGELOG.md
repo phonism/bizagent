@@ -14,6 +14,24 @@ Everything since `0.1.0-alpha.2`, toward the first stable release.
 - Chats opened from the panel are attached to a workspace named after their Home and appear in the
   DSH sidebar.
 
+### Organization folders and the personal Home
+
+- BizAgent keeps its data in `~/BizAgent` (or `$BIZAGENT_HOME`) instead of `$DSH_HOME/bizagent`.
+  Your personal Homes live there; each organization gets its own folder, `orgs/<id>/`, which BizAgent
+  adds to the top of the DSH sidebar. Setup no longer asks for a DSH workspace. Data at the old
+  default place keeps being used until you move it, and organizations already created inside a
+  workspace keep working where they are (`active-organization.yaml` format 1 still loads; new ones
+  are format 2).
+- Sessions outside the organization folder belong to your personal Home (`personal:default`), which
+  now exists with or without an organization. Before, they fell back to the organization's business
+  Home, so unrelated work (coding in your own repositories) was saved into the organization's
+  memory. Such bindings from earlier versions are released at startup.
+- File copies kept for Worklogs, Work, Projects, and learning reviews go to the data folder of the
+  Home they belong to, so personal work never lands in the organization folder.
+- The panel shows which Home the current chat belongs to, offers **New chat in organization** for
+  personal chats, groups the Home list into your Homes and the organization's, and shows the
+  Learning view even before an organization exists.
+
 ### Works out of the box
 
 - **Create sample team** in first-time setup builds *Sample Shop* (a growth lead, a data analyst,

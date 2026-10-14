@@ -48,6 +48,7 @@ import {
 } from './domain.js'
 import type { ResolvedConfig } from './config.js'
 import { HomeStore, type CreateOrganizationInput } from './home-store.js'
+import { HomeSpace } from './home-space.js'
 import { resolveHomeDirectoryTarget, searchHomeDirectory, visibleHomeDirectory } from './home-directory.js'
 import { inboxWakeSchedule } from './inbox-wake-policy.js'
 import { INBOX_STALE_ESCALATE_MS, stalledInboxTopics } from './inbox-stalled-topic.js'
@@ -145,7 +146,7 @@ export class BizAgentService {
   private sessionWorklogRecoveryOffset = 0
 
   constructor(
-    store: HomeStore,
+    store: HomeSpace | HomeStore,
     readonly ledger: LearningLedger,
     readonly config: ResolvedConfig,
     private readonly sessionQuery?: Pick<SessionQueryEngine, 'readSession'> & Partial<Pick<SessionQueryEngine, 'listSessions'>>,
@@ -155,31 +156,48 @@ export class BizAgentService {
     readonly projectLedger?: ProjectLedger,
     readonly worklogLedger?: WorklogLedger,
   ) {
-    this.store = store
+    // A single store is a personal space with no organization folder beside it.
+    this.store = store instanceof HomeSpace ? store : new HomeSpace(store)
   }
 
-  store: HomeStore
+  store: HomeSpace
 
   async initialize(): Promise<void> {
-    if (this.store.getOrganization() === undefined
-      && this.config.defaultHome !== undefined
+    // The personal Home lives in the personal space, beside any organization, and catches every
+    // Session that no organization Home claims.
+    if (this.config.defaultHome !== undefined
       && this.config.autoCreateDefaultHome
       && !this.store.hasHome(this.config.defaultHome)) {
       await this.store.createHome({
         address: this.config.defaultHome,
         owner: this.config.owner,
         ...(this.config.defaultIdentity !== undefined ? { identity: this.config.defaultIdentity } : {}),
-      })
+      }, 'personal')
     }
     for (const mapping of this.config.workspaceHomes) {
       if (!this.store.hasHome(mapping.address)) {
         throw new Error(`workspaceHomes references a missing Agent Home: ${mapping.address}`)
       }
     }
+    await this.releaseStrayBusinessBindings()
     await this.reconcileProposals()
     await this.reconcileSharedKnowledgeProposals()
     await this.refreshSharedKnowledgeIndex()
     await this.reconcileCheckpoints()
+  }
+
+  /**
+   * Before organizations had their own folder, every Session outside a Home folder fell back to the
+   * Business Home. Forget those bindings so the Sessions bind afresh, to the personal Home, on their
+   * next turn. Bindings the current rules still make are kept.
+   */
+  private async releaseStrayBusinessBindings(): Promise<void> {
+    const businessHome = this.store.getOrganization()?.businessHome
+    if (businessHome === undefined) return
+    for (const binding of this.ledger.listBindings(businessHome)) {
+      if (binding.cwd === undefined || this.resolveHome(binding.cwd) === businessHome) continue
+      await this.ledger.releaseBinding(binding)
+    }
   }
 
   getActiveOrganizationLocation(): ActiveOrganizationLocation | undefined {
@@ -203,22 +221,23 @@ export class BizAgentService {
     }
   }
 
-  /** A known Workspace whose new Sessions resolve to this active Business Home. */
+  /** A known Workspace whose new Sessions resolve to this active Business Home: the organization folder. */
   chatWorkspacePath(home: HomeAddress): string | undefined {
     const owner = this.store.getHome(home)
     if (owner.type !== 'business' || owner.status !== 'active') return undefined
     const candidates = [
       ...this.config.workspaceHomes.filter(mapping => mapping.address === home).map(mapping => mapping.root),
-      ...(this.activeOrganization ? [this.activeOrganization.workspacePath] : []),
+      ...(this.store.organizationRoot !== undefined ? [this.store.organizationRoot] : []),
     ]
     return candidates.find(path => this.resolveHome(path) === home)
   }
 
-  async createOrganizationInWorkspace(input: CreateOrganizationInput & { workspacePath: string }): Promise<void> {
-    const location = organizationLocation(input.workspacePath, input.id)
+  /** Create an organization in its own folder, `<data root>/orgs/<id>`, and make it the active one. */
+  async createOrganization(input: CreateOrganizationInput): Promise<void> {
+    const location = organizationLocation(this.config.homeRoot, input.id)
     const existingOrganization = this.store.getOrganization()
     if (existingOrganization !== undefined) {
-      if (existingOrganization.id === location.organizationId && this.store.root === location.organizationRoot) return
+      if (existingOrganization.id === location.organizationId && this.store.organizationRoot === location.organizationRoot) return
       throw new Error(`organization already exists at ${this.store.root}: ${existingOrganization.id}`)
     }
 
@@ -226,14 +245,14 @@ export class BizAgentService {
     await nextStore.initialize()
     await nextStore.createOrganization({ ...input, owner: input.owner ?? this.config.owner })
     await saveActiveOrganizationLocation(this.config.homeRoot, location)
-    this.store = nextStore
+    this.store = this.store.withOrganization(nextStore)
     this.activeOrganization = location
     await this.refreshSharedKnowledgeIndex()
   }
 
-  /** Create the one-click sample team in a DSH Workspace and place its sample data files. */
-  async createSampleOrganization(workspacePath: string): Promise<void> {
-    await this.createOrganizationInWorkspace({ ...SAMPLE_ORGANIZATION, workspacePath })
+  /** Create the one-click sample team and place its sample data files. */
+  async createSampleOrganization(): Promise<void> {
+    await this.createOrganization(SAMPLE_ORGANIZATION)
     for (const file of SAMPLE_FILES) {
       try {
         await writeFile(join(this.store.homeWorkspacePath(file.home), file.path), file.content, { flag: 'wx' })
@@ -437,7 +456,7 @@ export class BizAgentService {
       const cwd = agent.session.header.cwd
       if (filePaths.length > 0 && cwd === undefined) throw new Error('Worklog files require a Session Workspace')
       const files: WorklogRevision['files'] = []
-      const snapshots = new WorklogSnapshotStore(this.store.root)
+      const snapshots = new WorklogSnapshotStore(this.store.rootFor(binding.homeAddress))
       for (const path of filePaths) {
         const captured = await captureWorklogFile(cwd!, path)
         await snapshots.retain(captured.content)
@@ -509,8 +528,8 @@ export class BizAgentService {
     if (source === undefined) return 'deferred'
     if (!work.resultSubject || !work.resultBody) throw new Error('completed Work result is incomplete')
     const files: WorklogRevision['files'] = []
-    const workSnapshots = new WorkSnapshotStore(this.store.root)
-    const logSnapshots = new WorklogSnapshotStore(this.store.root)
+    const workSnapshots = new WorkSnapshotStore(this.store.rootFor(work.assignee))
+    const logSnapshots = new WorklogSnapshotStore(this.store.rootFor(binding.homeAddress))
     for (const artifact of work.resultArtifacts ?? []) {
       const bytes = await workSnapshots.read(artifact.sha256, artifact.bytes)
       await logSnapshots.retain(bytes)
@@ -683,7 +702,7 @@ export class BizAgentService {
     } catch (error) {
       source = { status: 'unavailable', reason: errorMessage(error) }
     }
-    const snapshots = new WorklogSnapshotStore(this.store.root)
+    const snapshots = new WorklogSnapshotStore(this.store.rootFor(worklog.homeAddress))
     const files = await Promise.all(worklog.files.map(async file => {
       let snapshot: 'retained' | 'unavailable' | 'legacy' = file.snapshot === true ? 'retained' : 'legacy'
       if (file.snapshot === true) {
@@ -719,7 +738,7 @@ export class BizAgentService {
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > file.bytes) {
       throw new Error('Worklog file offset is outside the retained snapshot')
     }
-    const bytes = await new WorklogSnapshotStore(this.store.root).read(file.sha256, file.bytes)
+    const bytes = await new WorklogSnapshotStore(this.store.rootFor(worklog.homeAddress)).read(file.sha256, file.bytes)
     const end = Math.min(offset + limit, bytes.length)
     return {
       sessionId: worklog.sessionId, revision: worklog.revision, path,
@@ -837,10 +856,9 @@ export class BizAgentService {
    */
   private async captureLearningLibrary(homeAddress: HomeAddress,
     startedWith: readonly LearningLibraryFile[] = []): Promise<LearningLibraryFile[]> {
-    const root = resolve(this.store.root)
-    const home = this.store.getHome(homeAddress)
+    const root = resolve(this.store.rootFor(homeAddress))
     const keep = new Set(startedWith.map(file => join(root, file.path)))
-    const paths = () => [join(this.store.homesRoot, home.id, 'identity.md'),
+    const paths = () => [join(this.store.homeWorkspacePath(homeAddress), 'identity.md'),
       ...this.store.listAssets(homeAddress)
         .filter(asset => asset.status !== 'retired' || keep.has(asset.bodyPath))
         .map(asset => asset.bodyPath)].sort()
@@ -993,7 +1011,7 @@ export class BizAgentService {
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > file.bytes) {
       throw new Error('learning library snapshot offset is outside the retained file')
     }
-    const bytes = await new LearningSnapshotStore(this.store.root).read(file.sha256, file.bytes)
+    const bytes = await new LearningSnapshotStore(this.store.rootFor(run.homeAddress)).read(file.sha256, file.bytes)
     const end = Math.min(offset + limit, bytes.length)
     return { runId: run.id, path: input.path, side: input.side,
       sha256: file.sha256, bytes: file.bytes, offset,
@@ -1940,7 +1958,7 @@ export class BizAgentService {
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > artifact.bytes) {
       throw new Error('Project artifact offset is outside the retained snapshot')
     }
-    const bytes = await new ProjectSnapshotStore(this.store.root).read(artifact.sha256, artifact.bytes)
+    const bytes = await new ProjectSnapshotStore(this.store.rootFor(project.lead)).read(artifact.sha256, artifact.bytes)
     const end = Math.min(offset + limit, bytes.length)
     return {
       projectId: project.id, claimId: claim.id, path,
@@ -1996,7 +2014,7 @@ export class BizAgentService {
         throw new Error('Project result needs a retained artifact or a delivered formal Work result')
       }
       const artifacts = []
-      const snapshots = new ProjectSnapshotStore(this.store.root)
+      const snapshots = new ProjectSnapshotStore(this.store.rootFor(project.lead))
       for (const path of artifactRefs) {
         if (binding.cwd === undefined || agent.session.header.cwd === undefined
           || resolve(binding.cwd) !== resolve(agent.session.header.cwd)) {
@@ -2135,7 +2153,7 @@ export class BizAgentService {
             throw new Error('Project claim Work evidence changed or is missing')
           }
           for (const artifact of source.resultArtifacts ?? []) {
-            await new WorkSnapshotStore(this.store.root).read(artifact.sha256, artifact.bytes)
+            await new WorkSnapshotStore(this.store.rootFor(source.assignee)).read(artifact.sha256, artifact.bytes)
           }
         }
         if ((claim.artifacts?.length ?? 0) === 0 && !claim.work.some(item => item.status === 'completed'
@@ -2145,7 +2163,7 @@ export class BizAgentService {
           throw new Error('Project claim no longer has a delivered formal Work result')
         }
         for (const artifact of claim.artifacts ?? []) {
-          await new ProjectSnapshotStore(this.store.root).read(artifact.sha256, artifact.bytes)
+          await new ProjectSnapshotStore(this.store.rootFor(project.lead)).read(artifact.sha256, artifact.bytes)
         }
       }
       const review = {
@@ -2421,7 +2439,7 @@ export class BizAgentService {
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > artifact.bytes) {
       throw new Error('Work artifact offset is outside the retained snapshot')
     }
-    const bytes = await new WorkSnapshotStore(this.store.root).read(artifact.sha256, artifact.bytes)
+    const bytes = await new WorkSnapshotStore(this.store.rootFor(work.assignee)).read(artifact.sha256, artifact.bytes)
     const end = Math.min(offset + limit, bytes.length)
     return {
       workId: work.id, resultMessageId: work.resultMessageId, path,
@@ -2438,7 +2456,7 @@ export class BizAgentService {
     const submittedBody = work.resultBody?.startsWith(resultPrefix)
       ? work.resultBody.slice(resultPrefix.length) : work.resultBody
     if ((work.resultArtifacts?.length ?? 0) > 0) {
-      const snapshots = new WorkSnapshotStore(this.store.root)
+      const snapshots = new WorkSnapshotStore(this.store.rootFor(work.assignee))
       for (const artifact of work.resultArtifacts ?? []) {
         const bytes = await snapshots.read(artifact.sha256, artifact.bytes)
         const evaluation = evaluateWorkOutput('artifact', bytes, artifact.path)
@@ -2526,7 +2544,7 @@ export class BizAgentService {
       if (current.projectId !== undefined) await this.recordProjectTurn(agent, binding, current.projectId)
       if (current.status !== 'accepted') return current
       const resultArtifacts: NonNullable<FormalWork['resultArtifacts']> = []
-      const snapshots = new WorkSnapshotStore(this.store.root)
+      const snapshots = new WorkSnapshotStore(this.store.rootFor(current.assignee))
       for (const path of artifactRefs) {
         if (binding.cwd === undefined || agent.session.header.cwd === undefined
           || resolve(binding.cwd) !== resolve(agent.session.header.cwd)) {
@@ -3677,11 +3695,20 @@ export class BizAgentService {
         const rel = relative(mapping.root, target)
         if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) return mapping.address
       }
+      // The rest of the organization folder belongs to the organization's Business Home.
+      const businessHome = this.store.getOrganization()?.businessHome
+      const organizationRoot = this.store.organizationRoot
+      if (businessHome !== undefined && organizationRoot !== undefined
+        && this.store.findHome(businessHome)?.status === 'active') {
+        const rel = relative(organizationRoot, target)
+        if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) return businessHome
+      }
     }
+    // Everything else is the person's own work: the personal Home, never the organization.
     if (this.config.defaultHome !== undefined && this.store.hasHome(this.config.defaultHome)) {
       return this.config.defaultHome
     }
-    return this.store.getOrganization()?.businessHome
+    return undefined
   }
 
   private frameState(sessionId: string, primaryHome: HomeAddress): AgentFrameState {

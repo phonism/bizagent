@@ -141,9 +141,11 @@ export const BIZAGENT_UI_CSS: string = `
 .ba-current-location { max-width: 330px; min-height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--ba-purple) 28%, var(--dsw-alias-border-l2)); border-radius: 999px; background: color-mix(in srgb, var(--ba-purple) 6%, var(--dsw-alias-bg-layer-2)); font-size: 10px; }
 .ba-current-location strong,
 .ba-current-location code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ba-current-location strong { max-width: 105px; }
+.ba-current-location strong { max-width: 150px; font-size: 11px; }
 .ba-current-location > span { color: var(--dsw-alias-label-caption); }
 .ba-current-location code { color: var(--ba-purple); font: 9px/14px var(--ds-font-family-code); }
+.ba-current-location[data-scope="personal"] { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2); }
+.ba-current-location[data-scope="personal"] code { color: var(--dsw-alias-label-secondary); }
 .ba-health {
   display: inline-flex;
   align-items: center;
@@ -216,6 +218,8 @@ export const BIZAGENT_UI_CSS: string = `
 .ba-proposal-list,
 .ba-asset-list { list-style: none; margin: 0; padding: 0; }
 .ba-home-list { min-height: 0; overflow: auto; padding: 0 8px 14px; }
+.ba-home-group { display: contents; }
+.ba-home-group-title { margin: 6px 16px 4px; color: var(--dsw-alias-label-caption); font-size: 11px; font-weight: 600; }
 .ba-home-button {
   width: 100%;
   display: grid;

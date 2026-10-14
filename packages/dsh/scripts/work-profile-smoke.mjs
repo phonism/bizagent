@@ -193,7 +193,7 @@ async function headless(patch, task, cwd = packageRoot) {
   const child = spawn('dsh', ['--profile', 'headless', '--patch', patch,
     task], {
     cwd,
-    env: { ...process.env, DSH_HOME: root, DSH_TELEMETRY_DISABLED: '1',
+    env: { ...process.env, DSH_HOME: root, BIZAGENT_HOME: join(root, 'bizagent'), DSH_TELEMETRY_DISABLED: '1',
       BIZAGENT_SMOKE_KEY: 'local-only', DSH_TOOLS_MODE: 'native' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
