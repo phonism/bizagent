@@ -97,7 +97,8 @@ export class BizAgentUiFacade {
     return {
       sessionId,
       primaryHome: { address: status.state.primaryHome,
-        displayName: names.get(status.state.primaryHome) ?? status.state.primaryHome },
+        displayName: names.get(status.state.primaryHome) ?? status.state.primaryHome,
+        scope: this.service.store.isPersonalHome(status.state.primaryHome) ? 'personal' : 'organization' },
       frames: status.state.frames.map(frame => ({
         address: frame.address,
         displayName: names.get(frame.address) ?? frame.address,

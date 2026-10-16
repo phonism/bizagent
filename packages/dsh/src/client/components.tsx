@@ -38,6 +38,7 @@ import { ProjectsDashboard } from './projects.js'
 import { HumanInboxDashboard } from './human-inbox.js'
 import { SampleGuide } from './sample-guide.js'
 import { MarkdownBody } from './markdown.js'
+import { homeName } from './home-name.js'
 
 export interface BizAgentUiFace {
   controller: BizAgentUiController
@@ -444,6 +445,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, openWorks
                 <HomeWorkspace
                   api={api}
                   detail={detail}
+                  scope={overview?.homes.find(home => home.address === detail.home.address)?.scope}
                   sessionId={currentSessionId}
                   selectedAsset={selectedAsset}
                   onSelectAsset={(id) => { setSelectedAsset(current => current === id ? undefined : id) }}
@@ -899,7 +901,7 @@ function HomeDirectory({ homes, selected, onSelect, onCreate, t }: {
                 >
                   <span className="ba-home-type-dot" data-type={home.type} aria-hidden="true" />
                   <span className="ba-home-copy">
-                    <span className="ba-home-name">{home.displayName}</span>
+                    <span className="ba-home-name">{homeName(home, t)}</span>
                     <span className="ba-home-address">{home.address} · r{home.revision}</span>
                   </span>
                   {home.incomingPending > 0 ? <span className="ba-home-badge">{home.incomingPending}</span> : null}
@@ -913,9 +915,10 @@ function HomeDirectory({ homes, selected, onSelect, onCreate, t }: {
   )
 }
 
-function HomeWorkspace({ api, detail, sessionId, selectedAsset, onSelectAsset, onOpenPrincipal, t }: {
+function HomeWorkspace({ api, detail, scope, sessionId, selectedAsset, onSelectAsset, onOpenPrincipal, t }: {
   api: BizAgentUiPort
   detail: UiHomeDetail
+  scope: UiHomeSummary['scope'] | undefined
   sessionId: string | undefined
   selectedAsset: string | undefined
   onSelectAsset: (id: string) => void
@@ -949,7 +952,7 @@ function HomeWorkspace({ api, detail, sessionId, selectedAsset, onSelectAsset, o
             <span>·</span>
             {t('home.revision', { revision: summary.revision })}
           </div>
-          <h3 className="ba-home-heading">{summary.displayName}</h3>
+          <h3 className="ba-home-heading">{homeName({ ...summary, scope }, t)}</h3>
           <div className="ba-address-line">{summary.address}</div>
           <button type="button" className="ba-button" onClick={() => {
             void onOpenPrincipal(summary.address).catch(cause => { setOpenError(errorMessage(cause)) })

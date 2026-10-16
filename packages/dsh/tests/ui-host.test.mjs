@@ -308,7 +308,7 @@ test('Agent directory UI route uses the server-side Session and rechecks selecte
   await service.openFrame(agent('directory-session', root), { address: 'role:growth-strategy', mode: 'lead' })
   const frames = await get('/api/bizagent/v1/frames?sessionId=directory-session')
   assert.equal(frames.status, 200)
-  assert.deepEqual(frames.body.primaryHome, { address: 'personal:alice', displayName: 'Alice' })
+  assert.deepEqual(frames.body.primaryHome, { address: 'personal:alice', displayName: 'Alice', scope: 'personal' })
   assert.deepEqual(frames.body.frames, [{ address: 'role:growth-strategy', displayName: 'Growth Strategy',
     mode: 'lead', focused: true, refreshRequired: false }])
   sessionEvents.push({ seq: 2, type: 'compaction/end', data: {} })

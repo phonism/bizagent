@@ -70,7 +70,7 @@ export type UiAgentDirectory = { count: number; homes: HomeDirectoryEntry[] }
 export type UiAgentTarget = HomeDirectoryEntry
 export interface UiFrameParticipation {
   sessionId: string
-  primaryHome: { address: HomeAddress; displayName: string }
+  primaryHome: { address: HomeAddress; displayName: string; scope: UiHomeSummary['scope'] }
   frames: Array<{
     address: HomeAddress
     displayName: string

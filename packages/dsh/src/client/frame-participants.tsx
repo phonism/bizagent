@@ -4,6 +4,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { UiFrameParticipation } from '../ui-contract.js'
 import type { BizAgentUiPort } from './api.js'
+import { homeName } from './home-name.js'
 
 type FrameDockProps = PropsRuntime<'conversation.input.dock'>
   & InjectFace<{ api: BizAgentUiPort }>
@@ -40,7 +41,7 @@ export function FrameParticipationDock({ sessionId, useSession, api, t }: FrameD
     <div className="ba-frame-dock" aria-label={t('frames.aria')}>
       <span className="ba-frame-dock-label">{t('frames.label')}</span>
       <span className="ba-frame-chip ba-frame-primary" title={participation.primaryHome.address}>
-        <span>{t('frames.primary')}</span> {participation.primaryHome.displayName}
+        <span>{t('frames.primary')}</span> {homeName(participation.primaryHome, t)}
       </span>
       {participation.frames.map(frame => (
         <span className="ba-frame-chip" data-mode={frame.mode} key={frame.address} title={frame.address}>
