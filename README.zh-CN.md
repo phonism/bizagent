@@ -78,8 +78,8 @@ npm run examples
 
 ## 状态
 
-BizAgent 正在准备 1.0。目前对应 DSH `0.2.0-rc.2`，按本机单人使用设计：一个人拥有这个组织，并在 DSH 网页里验收结果。
-1.0 之前接口仍可能变化。
+BizAgent 1.0 对应 DSH `0.2.0-rc.2`，也就是 DSH 当前的发布版本（DSH 还没有正式版）。按本机单人使用设计：一个人拥有这个组织，并在 DSH 网页里验收结果。
+版本号遵循语义化版本：1.x 之内，对外接口（`@bizagent/dsh` 和 `@bizagent/dsh/host`）、Agent 工具名和 BizAgent 写下的文件格式都不会做不兼容的改动。
 
 这个仓库早期还包含一个 Claude Code / Agent SDK 的运行时，现在不在这里维护了；DSH 是唯一支持的运行环境。
 

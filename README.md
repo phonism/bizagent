@@ -89,9 +89,11 @@ npm run examples
 
 ## Status
 
-BizAgent is preparing its 1.0 release. It targets DSH `0.2.0-rc.2` and runs as a single-person
-local setup: one person owns the organization and reviews its results in the DSH web app.
-Interfaces may still change before 1.0.
+BizAgent 1.0 targets DSH `0.2.0-rc.2`, the current DSH release (DSH has no stable release yet).
+It runs as a single-person local setup: one person owns the organization and reviews its results
+in the DSH web app. Releases follow semantic versioning: within 1.x, the public API
+(`@bizagent/dsh` and `@bizagent/dsh/host`), the Agent tool names, and the files BizAgent writes
+do not change incompatibly.
 
 Earlier versions of this repository also contained a Claude Code / Agent SDK runtime. It is no
 longer developed here; DSH is the only supported runtime.

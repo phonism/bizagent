@@ -6,7 +6,7 @@ import vm from 'node:vm'
 test('published package declares an installable DSH bundle', async () => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
   assert.equal(manifest.name, '@bizagent/dsh')
-  assert.equal(manifest.version, '0.1.0-alpha.2')
+  assert.equal(manifest.version, '1.0.0')
   assert.equal(manifest.peerDependencies['@deepseek-ai/cordis'], '~4.0.4')
   assert.equal(manifest.dependencies['@deepseek-ai/schemastery'], '3.18.4')
   assert.equal(manifest.dependencies.yaml, '2.9.0')

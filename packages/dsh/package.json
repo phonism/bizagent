@@ -1,6 +1,6 @@
 {
   "name": "@bizagent/dsh",
-  "version": "0.1.0-alpha.2",
+  "version": "1.0.0",
   "description": "Long-term memory and teamwork for agents on DeepSeek Harness (DSH): Agent Homes, evidence-backed learning, governed sharing, Inbox, formal Work, and Projects.",
   "repository": {
     "type": "git",

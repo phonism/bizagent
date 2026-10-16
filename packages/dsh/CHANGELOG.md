@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased (1.0.0)
+## 1.0.0
 
-Everything since `0.1.0-alpha.2`, toward the first stable release.
+The first stable release: everything since `0.1.0-alpha.2`.
 
 ### Runs on DSH 0.2
 
@@ -31,6 +31,7 @@ Everything since `0.1.0-alpha.2`, toward the first stable release.
 - The panel shows which Home the current chat belongs to, offers **New chat in organization** for
   personal chats, groups the Home list into your Homes and the organization's, and shows the
   Learning view even before an organization exists.
+- Your personal Home shows as *My personal Home* in the panel instead of its address.
 
 ### Works out of the box
 
