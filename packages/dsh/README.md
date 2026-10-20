@@ -1,67 +1,66 @@
 # @bizagent/dsh-plugin
 
-Long-term memory and teamwork for agents on [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
+**语言**：中文 | [English](README.en.md)
 
-BizAgent adds lasting Homes, evidence-backed learning, governed sharing, Inbox messages, formal
-Work, and Projects with human acceptance. DSH runs the models, tools, and sessions.
+给 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 上的 Agent 加上长期记忆和团队协作。
 
-## Start here
+BizAgent 用 Home 保存身份、经验和工作记录，支持共享知识、收件箱、独立派工和人工验收。
+DSH 负责运行模型、工具和会话。
+
+## 从这里开始
 
 ```sh
 dsh plugin --profile web add @bizagent/dsh-plugin@1.0.1
 ```
 
-- **Install:** [English quick start](docs/quickstart.md) / [中文安装指南](docs/quickstart.zh-CN.md).
-- **Already installed:** [use BizAgent](docs/quickstart.md#use-bizagent) / [中文用户指南](docs/user-guide.zh-CN.md).
-- **Look up a feature:** [documentation map](docs/README.md), [concepts](docs/concepts.md),
-  [configuration](docs/configuration.md), [59 Agent tools](docs/tools.md).
-- **Check versions and evidence:** [verification and compatibility](docs/verification.md).
+- **尚未安装**：[中文安装指南](docs/quickstart.zh-CN.md)。
+- **已经安装**：[用户指南](docs/user-guide.zh-CN.md)，完成记忆、派工和人工验收。
+- **查询功能**：[文档导航](docs/README.md)，按需查概念、配置和工具参数。
+- **核对版本与验收范围**：[兼容与验证](docs/verification.md)。
 
-Start with one saved rule in your personal Home. An organization is optional for that first step;
-existing organizations can use separate practice Homes without resetting data.
+先在自己的 Home 保存一条规则，不必先建组织。已有组织时使用独立的练习 Home，无需重置数据。
 
-## In DSH Web
+## 在 DSH Web 中使用
 
-| Surface | Use |
+| 入口 | 用途 |
 | --- | --- |
-| BizAgent organization panel | Organize Homes; inspect learning; review proposals and Projects |
-| Session Home button | Check which Home owns the conversation and open its learning |
-| Work & learning tab | Inspect this session's Work, worker/result links, and related Projects |
-| Turn receipts | Open the successful records saved in a completed turn |
-| Composer `@` and Frame bar | Load shared Home context in the current session |
-| My Inbox | Read agent messages and reply to the originating session |
+| BizAgent 组织 | 管理 Home、查看经验、审核提案和项目 |
+| 会话顶部的 Home | 确认会话归属，打开对应 Home 的经验 |
+| 工作与经验 | 查看本会话的派工、执行会话、交付结果和项目 |
+| 轮次回执 | 打开这一轮实际保存成功的记录 |
+| 输入区 `@` 与 Frame 状态栏 | 在当前会话加载共享 Home 的只读上下文 |
+| 我的收件箱 | 读取 Agent 消息，回复并唤回原会话 |
 
-Formal Work starts in an independent worker when both Homes share an owner. A Frame provides
-read-only context in the current session. Only a person can accept a submitted Project result.
+双方 Home 属于同一 owner 时，正式 Work 会在独立执行会话中运行。
+Frame 在当前会话提供只读上下文；提交后的 Project 由人验收。
 
-## Package entry points
+## 包入口
 
-| Import | Use |
+| 导入路径 | 用途 |
 | --- | --- |
-| `@bizagent/dsh-plugin` | Core plugin and types (`name`, `inject`, `Config`, `apply`) |
-| `@bizagent/dsh-plugin/ui-host` | Authenticated panel HTTP routes |
-| `@bizagent/dsh-plugin/local-human-host` | Local owner's review and Inbox routes |
-| `@bizagent/dsh-plugin/client` | Browser bundle loaded by DSH Web |
-| `@bizagent/dsh-plugin/host` | Building blocks for hosts with their own authentication |
+| `@bizagent/dsh-plugin` | 核心插件与类型（`name`、`inject`、`Config`、`apply`） |
+| `@bizagent/dsh-plugin/ui-host` | 需要登录的面板 HTTP 接口 |
+| `@bizagent/dsh-plugin/local-human-host` | 本机用户的审核与收件箱接口 |
+| `@bizagent/dsh-plugin/client` | DSH Web 加载的浏览器模块 |
+| `@bizagent/dsh-plugin/host` | 接入自有身份认证宿主的基础组件 |
 
-The package also installs `bizagent` for Home files: `init`, `home create|list`, `doctor`,
-`reindex`, and `archive export|verify|import`. Run `bizagent --help` for usage.
+包内还提供 `bizagent` 命令，支持 Home 初始化、创建与列表、健康检查、重建索引和归档导入导出。
+运行 `bizagent --help` 查看用法。
 
-## Development
+## 开发
 
 ```sh
 npm ci
-npm test                 # builds and runs automated tests
+npm test
 npm run typecheck
-npm run examples         # service scenarios without a model
+npm run examples
 npm run smoke:local-human
 npm run smoke:session-ui
 npm run pack:check
 ```
 
-Runtime smokes use isolated profiles and a local fake model. See [verification](docs/verification.md)
-for the distinction between service tests, runtime integration, and real-model browser acceptance.
-After publishing, `npm run smoke:registry` checks the same flow using the public npm package.
-For user-visible changes, update the [changelog](CHANGELOG.md).
+运行时冒烟使用隔离的 DSH profile 和本地模拟模型；服务测试、运行时集成与真实模型浏览器验收的区别见
+[兼容与验证](docs/verification.md)。发布后可运行 `npm run smoke:registry` 验证公开 npm 包的安装流程。
+用户可见的变更记录在 [CHANGELOG](CHANGELOG.md)。
 
-[MIT](LICENSE)
+[MIT 许可证](LICENSE)

@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const files = [
-  'README.md', 'README.zh-CN.md', 'CONTRIBUTING.md', 'SECURITY.md', 'packages/dsh/README.md',
+  'README.md', 'README.en.md', 'README.zh-CN.md', 'CONTRIBUTING.md', 'SECURITY.md',
+  'packages/dsh/README.md', 'packages/dsh/README.en.md',
   'packages/dsh/CHANGELOG.md',
 ].map(path => join(root, path))
 for (const directory of [

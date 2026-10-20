@@ -1,49 +1,43 @@
 # BizAgent
 
-Long-term memory and teamwork for agents on [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
+**语言**：中文 | [English](README.en.md)
 
-**Languages**: English | [中文](README.zh-CN.md)
+给 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 上的 Agent 加上长期记忆和团队协作。
 
-DSH runs conversations, models, and tools. BizAgent gives each agent a lasting **Home** for its
-identity, lessons, and work records. New conversations can reuse those lessons; agents can hand
-work to teammates and submit results for you to accept.
+DSH 负责运行对话、调用模型和工具。BizAgent 为 Agent 提供持续存在的 **Home**，保存身份、经验和工作记录，
+让它能在新对话中复用经验，也能把工作交给其他 Agent，最后由你验收结果。
 
-- **Keep lessons with evidence.** Assets are readable Markdown/YAML with links to their sources.
-  New sessions receive identity and an index of active assets; the agent reads full bodies as needed.
-- **Keep ownership clear.** Each session belongs to one Home. Frames provide read-only context
-  from shared Homes; sharing a lesson requires the target owner's approval.
-- **Track delivery.** Formal Work records acceptance, execution, and one result. Projects gather
-  the evidence and wait for a person to accept or request rework.
-- **Find the outcome.** Session headers show the Home; **Work & learning** shows Work, results,
-  and Projects; **My Inbox** keeps notifications and replies.
+- **记得住**：经验保存为可查看的 Markdown/YAML，附带来源；新会话拿到身份和生效经验索引，按需读取正文。
+- **分得清**：每段会话归属一个 Home；引用其他 Home 的知识使用只读 Frame，分享经验需要目标方审批。
+- **交得出**：正式 Work 有接单、执行和交付记录；Project 汇总结果，等待你确认通过或退回返工。
+- **找得到**：会话顶部显示 Home，「工作与经验」显示进度、产物和项目，收件箱保存通知与回复。
 
-## Start where you are
+## 从这里开始
 
-| Your situation | Read next | First success |
+| 你现在的情况 | 下一步 | 完成标志 |
 | --- | --- | --- |
-| New to DSH, or the plugin is not installed | [Install and first success](packages/dsh/docs/quickstart.md) | See a saved rule in Learning |
-| BizAgent already opens | [Quick start: use BizAgent](packages/dsh/docs/quickstart.md#use-bizagent) | Dispatch Work and accept a Project result |
-| Looking for progress or a result | [Concepts: find the outcome](packages/dsh/docs/concepts.md#find-the-outcome) | Locate the worker, delivered result, and review status |
-| Developing or embedding BizAgent | [Documentation map](packages/dsh/docs/README.md) | Find the relevant configuration, architecture, or tool reference |
+| 第一次接触 DSH / 尚未装插件 | [安装与首次成功](packages/dsh/docs/quickstart.zh-CN.md) | 在「学习」里看到自己教的一条规则 |
+| 已能打开 BizAgent | [用户指南](packages/dsh/docs/user-guide.zh-CN.md) | 完成一次独立派工并亲自验收 |
+| 已有组织，想看进度或结果 | [入口与状态速查](packages/dsh/docs/user-guide.zh-CN.md#入口与状态速查) | 找到执行会话、交付内容和项目验收状态 |
+| 想研究实现或接入自己的宿主 | [文档导航](packages/dsh/docs/README.md) | 按需查概念、配置、架构或工具 |
 
-You can try memory in your personal Home before creating an organization. If an organization
-already exists, keep using it; the [Chinese user guide](packages/dsh/docs/user-guide.zh-CN.md)
-uses separate practice Homes rather than resetting it.
+第一次使用不必先建组织。先在自己的 Home 验证记忆，再尝试团队协作。
+已经有组织时继续使用现有组织；用户指南提供独立的练习 Home，不要求重置数据。
 
-![The sample team and its guide in BizAgent's organization page](assets/screenshots/sample-team.png)
+![BizAgent 组织页的示例团队与上手向导](assets/screenshots/sample-team.png)
 
-## A complete example
+## 一个完整例子
 
-The [Chinese user guide](packages/dsh/docs/user-guide.zh-CN.md) follows two practice Homes through
-a four-order GMV check: save a rule, dispatch independent Work, inspect the files, submit the
-Project, and accept it in the browser. The expected total is **300**.
+在[用户指南](packages/dsh/docs/user-guide.zh-CN.md)中，你会创建两个练习 Home，让负责人记住 GMV 口径，
+把四笔虚构订单交给分析师在独立会话中核对。结果为 **300 元**；负责人复核并提交后，你在页面人工验收。
+每一步都给出入口、可复制的需求和成功标志。
 
-The built-in Sample Shop uses a different `orders.csv`; its expected total is **400.50**.
-See the [quick start](packages/dsh/docs/quickstart.md#use-bizagent) for that walkthrough.
+内置「示例商店」使用另一份 `orders.csv`，对应 GMV 为 **400.50 元**。
+两组数据的口径和用途见[用户指南](packages/dsh/docs/user-guide.zh-CN.md#内置示例团队)。
 
-## Try it without a model
+## 不用模型先试试
 
-The Learning Lab runs three fixed cases in temporary directories, without a model or DSH process:
+Learning Lab 在临时目录运行三个固定案例，不需要模型或 DSH 进程：
 
 ```sh
 git clone https://github.com/phonism/bizagent.git
@@ -52,15 +46,12 @@ npm ci
 npm run examples
 ```
 
-This checks service behavior. See [Verification and compatibility](packages/dsh/docs/verification.md)
-for the separate runtime and browser checks.
+它验证服务逻辑；真实模型与浏览器的验证范围见[兼容与验证](packages/dsh/docs/verification.md)。
 
-## Scope
+## 适用范围
 
-BizAgent currently serves one person managing their agents in local DSH Web. DSH is the only
-supported runtime. See [Verification and compatibility](packages/dsh/docs/verification.md) for
-the development baseline, tested DSH version, and verified features.
-BizAgent governs Home and delivery records; DSH controls machine permissions. Read the
-[trust model](packages/dsh/docs/architecture.md#trust-model) before embedding it elsewhere.
+当前面向一个人在本机 DSH Web 中管理自己的 Agent 团队；DSH 是唯一支持的运行环境。
+包的开发基线、已实测的 DSH 版本和已验证功能见[兼容与验证](packages/dsh/docs/verification.md)。
+BizAgent 管理 Home 和交付记录的归属；机器上的文件与进程权限由 DSH 控制，详见[信任边界](packages/dsh/docs/architecture.md#trust-model)。
 
-[Documentation](packages/dsh/docs/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [MIT license](LICENSE)
+更多入口：[文档导航](packages/dsh/docs/README.md) · [参与贡献](CONTRIBUTING.md) · [安全报告](SECURITY.md) · [MIT 许可证](LICENSE)

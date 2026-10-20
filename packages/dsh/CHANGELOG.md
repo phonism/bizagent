@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Show Chinese by default in the repository and plugin READMEs, with an English link at the
+  top of each page. Include the English README in the npm package.
+
 ## 1.0.1 — 2026-10-20
 
 - Rename the npm package to `@bizagent/dsh-plugin` so its role as a DSH plugin is clear.
