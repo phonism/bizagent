@@ -18,12 +18,13 @@ npm run pack:check
 ```
 
 Runtime smokes start isolated DSH profiles against a local fake model. They need the DSH CLI the
-package targets on `PATH`:
+CI runtime pins on `PATH` (see [version baselines](packages/dsh/docs/verification.md)):
 
 ```sh
-npm install --global @deepseek-ai/dsh@0.2.0-rc.2
+npm install --global @deepseek-ai/dsh@0.2.1-rc.2
 npm run smoke:plugin-add   # install the packed tarball with `dsh plugin add`
 npm run smoke:local-human  # web profile: Principals, Project Main, Work, human acceptance
+npm run smoke:session-ui   # selected Frame admission and Session Work/result surfaces
 npm run smoke:agent && npm run smoke:work && npm run smoke:project && npm run smoke:learning
 ```
 
@@ -44,6 +45,11 @@ git diff --check
 
 The link checker validates local inline Markdown file targets; it does not check external
 URLs or heading anchors.
+
+Keep installation commands in the quick starts and user tasks in the user guide. READMEs should
+route readers to those pages rather than repeat them. For each user flow, name the entry point,
+the action, and an observable success check. Keep English and Chinese entry routes consistent;
+put version/test claims in [Verification](packages/dsh/docs/verification.md).
 
 ## Design rules
 

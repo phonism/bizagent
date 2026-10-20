@@ -1,6 +1,16 @@
+export type DashboardView = 'organization' | 'learning' | 'projects' | 'humanInbox'
+export interface DashboardTarget {
+  view?: DashboardView
+  homeAddress?: string
+  projectId?: string
+  sessionId?: string
+  assetId?: string
+}
+
 export interface BizAgentUiSnapshot {
   readonly open: boolean
   readonly revision: number
+  readonly target?: DashboardTarget
 }
 
 export class BizAgentUiController {
@@ -14,8 +24,10 @@ export class BizAgentUiController {
     return () => { this.listeners.delete(listener) }
   }
 
-  open(): void {
-    this.setOpen(true)
+  open(target?: DashboardTarget): void {
+    this.snapshot = Object.freeze({ open: true, revision: this.snapshot.revision + 1,
+      ...(target ? { target } : {}) })
+    for (const listener of [...this.listeners]) listener()
   }
 
   close(): void {

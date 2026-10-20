@@ -36,7 +36,7 @@ test('@Agent input source filters Personal Homes and revalidates the selected Ho
   assert.equal(pick.insert.source, 'bizagent-agent')
   assert.equal(source.codec.clipboardText(pick.insert.ref), '@role:analyst')
   const serialized = await source.codec.serialize(pick.insert.ref, new AbortController().signal)
-  assert.match(serialized, /bizagent_frame_open with address role:analyst/)
+  assert.equal(serialized, '@role:analyst\n[BIZAGENT_FRAME_REQUEST:role:analyst]')
   assert.deepEqual(calls[1], { sessionId: 'session-1', target: 'role:analyst' })
   visible = false
   await assert.rejects(() => source.codec.serialize(pick.insert.ref, new AbortController().signal),

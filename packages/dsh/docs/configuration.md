@@ -1,7 +1,41 @@
 # Configuration
 
-BizAgent works without configuration. To change a setting, add a row for the `bizagent` plugin to
-your DSH profile's own patch file, `~/.dsh/profiles/web/cordis.patch.yml`, and restart DSH:
+New users can follow the [quick start](quickstart.md) without editing configuration.
+This page is the reference for model connections, custom settings, and data locations.
+
+## Model connection
+
+For another OpenAI-compatible endpoint, use DSH's model settings or add provider rows to
+`$DSH_HOME/profiles/web/cordis.patch.yml` (`DSH_HOME` defaults to `~/.dsh`):
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      my-model:
+        displayName: My model
+        apiKeyEnv: MY_MODEL_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:8000/v1
+        models:
+          - id: your-model-id
+            name: My model
+            input: [text]
+            contextWindow: 131072
+            maxTokens: 16384
+- id: agent-default-model
+  config:
+    provider: my-model
+    model: your-model-id
+```
+
+Replace the URL, model ID, limits, and modalities with the endpoint's actual capabilities. Provide
+`MY_MODEL_KEY` through DSH's credentials or the environment of a new DSH process. Selecting a
+model in DSH can also save its default; check that default before starting automatic Work.
+
+## Applying changes
+
+Add only the options you change to the profile patch. For example:
 
 ```yaml
 - id: bizagent
@@ -10,8 +44,10 @@ your DSH profile's own patch file, `~/.dsh/profiles/web/cordis.patch.yml`, and r
     owner: alice
 ```
 
-Rows in this file are merged over the defaults that BizAgent's bundle inserts, so list only the
-options you change.
+Rows merge over the bundle defaults. DSH Web profiles with HMR can apply profile changes and
+reload changed plugins without restarting the main process. Disabled HMR, headless profiles, or
+host dependency changes may require a planned restart. Let active work settle and inspect DSH's
+reload result rather than assuming an edit has taken effect.
 
 ## Plugin options
 
@@ -73,7 +109,7 @@ To accept a Project from a script, set `BIZAGENT_LOCAL_HUMAN_TOKEN_FILE` before 
 send the token:
 
 ```sh
-curl -X POST http://127.0.0.1:<port>/api/bizagent/project-review \
+curl -X POST 'http://127.0.0.1:<port>/api/bizagent/project-review' \
   -H "Authorization: Bearer $(cat ~/.config/bizagent/human.token)" \
   -H "Origin: http://127.0.0.1:<port>" -H 'Content-Type: application/json' \
   -d '{"projectId":"<id>","claimId":"<claim>","expectedRevision":3,"decision":"accept","reason":"Checked."}'
@@ -81,6 +117,28 @@ curl -X POST http://127.0.0.1:<port>/api/bizagent/project-review \
 
 `GET /api/bizagent/project-review?projectId=<id>` with the same header returns the current claim
 id and revision.
+
+## Data and backups
+
+- Home files live in `~/BizAgent` (or `homeRoot` / `BIZAGENT_HOME`): your outside personal Homes
+  under `homes/`, and organization Homes under `orgs/<id>/homes/`. A Home folder is also its
+  normal chat/worker directory, unless an explicit workspace mapping is configured.
+- Bindings, proposals, Inbox, Work, Projects, and Worklogs live in DSH storage under `DSH_HOME`.
+  Original conversations are DSH sessions. Retained artifact snapshots belong to the Home's data space.
+
+An organization directory alone is not a full backup. Preserve both the Home data and the matching
+DSH data. The Home archive commands verify the file portion; from `packages/dsh`:
+
+```sh
+BIZAGENT_ORG_ROOT="$HOME/BizAgent/orgs/your-organization"
+node lib/cli.js --root "$BIZAGENT_ORG_ROOT" archive export ./homes-backup
+node lib/cli.js archive verify ./homes-backup
+```
+
+One organization is active at a time. There is no general organization-switching UI in this
+version. Keep the current organization when trying practice Homes; do not delete its directory
+or active pointer as an onboarding step. For a separate sandbox, use new, matching `DSH_HOME`
+and `BIZAGENT_HOME` directories and leave the existing instance intact.
 
 ## Hosts with their own login
 

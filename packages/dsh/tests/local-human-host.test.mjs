@@ -35,7 +35,11 @@ test('local DSH human host accepts a private Bearer token and checks the current
   const service = {
     store: { getHome: address => ({ owner: ['personal:alice', 'line:northstar'].includes(address) ? 'alice' : 'bob' }),
       homeWorkspacePath: address => `/tmp/home/${address}` },
-    ledger: { listSharedKnowledgeProposals: () => [...sharedProposals.values()],
+    ledger: { getBinding: id => ({
+      'work-alice': { homeAddress: 'personal:alice', cwd: '/tmp/home/personal:alice' },
+      'work-bob': { homeAddress: 'personal:bob', cwd: '/tmp/home/personal:bob' },
+      'ordinary-alice': { homeAddress: 'personal:alice', cwd: '/tmp/existing-project' },
+    })[id], listSharedKnowledgeProposals: () => [...sharedProposals.values()],
       getSharedKnowledgeProposal: id => sharedProposals.get(id) },
     async decideSharedKnowledgeAsHuman(input) {
       return { proposal: { ...sharedProposals.get(input.proposalId), status: 'accepted' },
@@ -105,6 +109,19 @@ test('local DSH human host accepts a private Bearer token and checks the current
   assert.deepEqual(attached, [['/tmp/home/personal:alice', 'principal-session-1']])
   assert.equal((await openSession({ projectId: 'bob-project' }, token)).status, 403)
   assert.equal((await openSession({ projectId: 'alice-project' }, token)).status, 200)
+  const beforeReveal = attached.length
+  assert.equal((await openSession({ sessionId: 'work-alice' })).status, 401)
+  assert.equal((await openSession({ sessionId: 'work-bob' }, token)).status, 403)
+  assert.equal((await openSession({ sessionId: 'missing' }, token)).status, 403)
+  assert.equal((await openSession({ sessionId: 'work-alice', homeAddress: 'personal:alice' }, token)).status, 400)
+  const worker = await openSession({ sessionId: 'work-alice' }, token)
+  assert.equal(worker.status, 200)
+  assert.deepEqual(await worker.json(), { sessionId: 'work-alice', workspacePath: '/tmp/home/personal:alice' })
+  assert.deepEqual(attached.at(-1), ['/tmp/home/personal:alice', 'work-alice'])
+  const ordinary = await openSession({ sessionId: 'ordinary-alice' }, token)
+  assert.equal(ordinary.status, 200)
+  assert.deepEqual(await ordinary.json(), { sessionId: 'ordinary-alice' })
+  assert.equal(attached.length, beforeReveal + 1)
   const review = projectId => JSON.stringify({ projectId, claimId: 'claim-1',
     expectedRevision: 2, decision: 'accept', reason: 'Checked by the owner.' })
   const send = (body, credential) => fetch(url, { method: 'POST',

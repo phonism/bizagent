@@ -187,7 +187,10 @@ test('ordinary wake and new-session digest warn before a topic reaches either li
   const deepReply = await service.sendInboxMessage(deep, 'hop-four', {
     to: ['personal:alice'], subject: 'Fourth hop', body: 'One reply.',
   })
-  assert.deepEqual(service.pendingInboxDigestForSession('reader-alice', root).messages[0].convergence,
+  // Messages can share a millisecond; assert this reply's warning rather than relying on
+  // timestamp ties placing it ahead of another topic in the digest.
+  assert.deepEqual(service.pendingInboxDigestForSession('reader-alice', root).messages
+    .find(message => message.id === deepReply.message.id)?.convergence,
     { topicId: another.message.id, hop: 4, topicCount: 2 })
 
   const live = new Map()

@@ -2,106 +2,65 @@
 
 Long-term memory and teamwork for agents on [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
-**Languages**: [English](./README.md) | [中文](./README.zh-CN.md)
+**Languages**: English | [中文](README.zh-CN.md)
 
-BizAgent is a DSH plugin. DSH runs the agents; BizAgent gives each long-running agent a Home that
-outlives any single chat, and lets a small team of agents learn and work together:
+DSH runs conversations, models, and tools. BizAgent gives each agent a lasting **Home** for its
+identity, lessons, and work records. New conversations can reuse those lessons; agents can hand
+work to teammates and submit results for you to accept.
 
-- **Homes.** Each agent keeps its identity, memories, knowledge, and methods in a Home: plain
-  Markdown and YAML files you can read. Every new chat with that agent starts from what its Home
-  already knows.
-- **Lessons with evidence.** When you correct an agent or teach it a rule, it saves the lesson with
-  a link back to the conversation it came from. Lessons it still needs to check stay candidates
-  until it confirms them.
-- **Sharing with consent.** An agent can propose a lesson to another agent's Home, but only that
-  Home's owner can accept it.
-- **Work between agents.** Agents send each other Inbox messages, hand off formal Work with one
-  accountable result, and run Projects whose result a person accepts.
+- **Keep lessons with evidence.** Assets are readable Markdown/YAML with links to their sources.
+  New sessions receive identity and an index of active assets; the agent reads full bodies as needed.
+- **Keep ownership clear.** Each session belongs to one Home. Frames provide read-only context
+  from shared Homes; sharing a lesson requires the target owner's approval.
+- **Track delivery.** Formal Work records acceptance, execution, and one result. Projects gather
+  the evidence and wait for a person to accept or request rework.
+- **Find the outcome.** Session headers show the Home; **Work & learning** shows Work, results,
+  and Projects; **My Inbox** keeps notifications and replies.
 
-![The BizAgent panel in DSH, showing the Sample Shop team and its five-minute guide](./assets/screenshots/sample-team.png)
+## Start where you are
 
-## Quick start
+| Your situation | Read next | First success |
+| --- | --- | --- |
+| New to DSH, or the plugin is not installed | [Install and first success](packages/dsh/docs/quickstart.md) | See a saved rule in Learning |
+| BizAgent already opens | [Quick start: use BizAgent](packages/dsh/docs/quickstart.md#use-bizagent) | Dispatch Work and accept a Project result |
+| Looking for progress or a result | [Concepts: find the outcome](packages/dsh/docs/concepts.md#find-the-outcome) | Locate the worker, delivered result, and review status |
+| Developing or embedding BizAgent | [Documentation map](packages/dsh/docs/README.md) | Find the relevant configuration, architecture, or tool reference |
 
-You need Node.js 22.19+ or 24+, [pnpm](https://pnpm.io), and a model: a DeepSeek API key, or any
-OpenAI-compatible endpoint.
+You can try memory in your personal Home before creating an organization. If an organization
+already exists, keep using it; the [Chinese user guide](packages/dsh/docs/user-guide.zh-CN.md)
+uses separate practice Homes rather than resetting it.
 
-```sh
-npm install --global @deepseek-ai/dsh@0.2.0-rc.2 pnpm
+![The sample team and its guide in BizAgent's organization page](assets/screenshots/sample-team.png)
 
-git clone https://github.com/phonism/bizagent.git
-cd bizagent/packages/dsh
-npm ci && npm run build && npm pack
-dsh plugin --profile web add "$PWD"/bizagent-dsh-*.tgz
+## A complete example
 
-export DEEPSEEK_API_KEY=sk-...   # or add another model in DSH Settings
-dsh --profile web
-```
+The [Chinese user guide](packages/dsh/docs/user-guide.zh-CN.md) follows two practice Homes through
+a four-order GMV check: save a rule, dispatch independent Work, inspect the files, submit the
+Project, and accept it in the browser. The expected total is **300**.
 
-DSH opens your browser. Click **BizAgent organization** at the bottom left, then
-**Create sample team**. The sample team comes with a small orders file and a five-minute guide:
-teach the analyst a rule, start a Project, let the analyst do the work in its own session, accept
-the result, and share the rule with the team.
-
-The [quick start guide](./packages/dsh/docs/quickstart.md) covers other models, your own
-organization, and troubleshooting.
-
-## The sample team, step by step
-
-These screenshots come from one run of the guide with an open model (Qwen3.8 27B).
-
-**1. Teach a rule.** Tell the data analyst that GMV excludes cancelled and refunded orders. It
-saves the rule in its Home, linked to the conversation it came from, and every later chat with the
-analyst starts with it.
-
-![The data analyst's Learning page with the saved GMV rule and its evidence](./assets/screenshots/learning.png)
-
-**2–3. Run a Project and accept the result.** The growth lead starts a Project. Its chat hands
-formal Work to the analyst, who computes GMV from `orders.csv` in its own session; the lead checks
-the number and submits it. Only you can accept it.
-
-![A Project result waiting for acceptance: GMV 400.50 with its evidence](./assets/screenshots/project-review.png)
-
-**4. Share with the team.** The analyst proposes the rule to the Sample Shop Home. It changes
-nothing there until the Home's owner accepts it.
-
-![A proposal from the data analyst waiting in the Sample Shop Home's inbox](./assets/screenshots/proposal.png)
+The built-in Sample Shop uses a different `orders.csv`; its expected total is **400.50**.
+See the [quick start](packages/dsh/docs/quickstart.md#use-bizagent) for that walkthrough.
 
 ## Try it without a model
 
-The Learning Lab runs three scripted cases against the real BizAgent services, with temporary data
-and no model or DSH process:
+The Learning Lab runs three fixed cases in temporary directories, without a model or DSH process:
 
 ```sh
-cd packages/dsh
+git clone https://github.com/phonism/bizagent.git
+cd bizagent/packages/dsh
 npm ci
 npm run examples
 ```
 
-## Documentation
+This checks service behavior. See [Verification and compatibility](packages/dsh/docs/verification.md)
+for the separate runtime and browser checks.
 
-- [Quick start](./packages/dsh/docs/quickstart.md)
-- [Concepts](./packages/dsh/docs/concepts.md): Homes, memory, proposals, Inbox, Work, Projects
-- [Configuration](./packages/dsh/docs/configuration.md)
-- [Architecture and trust model](./packages/dsh/docs/architecture.md)
-- [Agent tools](./packages/dsh/docs/tools.md) (generated from the code)
-- [Learning Lab](./packages/dsh/examples/README.md)
-- [Changelog](./packages/dsh/CHANGELOG.md)
+## Scope
 
-## Status
+BizAgent currently serves one person managing their agents in local DSH Web. DSH is the only
+supported runtime. See [Verification and compatibility](packages/dsh/docs/verification.md) for
+the development baseline, tested DSH version, and verified features.
+BizAgent governs Home and delivery records; DSH controls machine permissions. Read the
+[trust model](packages/dsh/docs/architecture.md#trust-model) before embedding it elsewhere.
 
-BizAgent 1.0 targets DSH `0.2.0-rc.2`, the current DSH release (DSH has no stable release yet).
-It runs as a single-person local setup: one person owns the organization and reviews its results
-in the DSH web app. Releases follow semantic versioning: within 1.x, the public API
-(`@bizagent/dsh` and `@bizagent/dsh/host`), the Agent tool names, and the files BizAgent writes
-do not change incompatibly.
-
-Earlier versions of this repository also contained a Claude Code / Agent SDK runtime. It is no
-longer developed here; DSH is the only supported runtime.
-
-## Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md). Security reports: [SECURITY.md](./SECURITY.md).
-
-## License
-
-[MIT](./LICENSE)
+[Documentation](packages/dsh/docs/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [MIT license](LICENSE)

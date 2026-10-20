@@ -19,6 +19,8 @@ import {
   BIZAGENT_UI_API,
   BIZAGENT_AGENT_DIRECTORY_API,
   BIZAGENT_FRAME_STATUS_API,
+  BIZAGENT_SESSION_CONTEXT_API,
+  BIZAGENT_SESSION_CATALOG_API,
   type UiAsset,
   type UiAssetCounts,
   type UiCreateHomeRequest,
@@ -28,6 +30,7 @@ import {
   type UiHomeSummary,
   type UiOverview,
 } from './ui-contract.js'
+import { sessionCatalog, sessionContext } from './session-surface.js'
 
 export const name = 'bizagent-ui-host'
 export const inject = ['bizagent', 'agents', 'sessionQuery', 'bizagentLearningScheduler', 'webServer']
@@ -281,6 +284,17 @@ export function apply(ctx: Context, _config: Config = {}): void {
     return { input, cwd: snapshot.session.cwd, events: snapshot.events }
   }
   const routes = [
+    ctx.webServer.register({ kind: 'exact', path: BIZAGENT_SESSION_CATALOG_API,
+      handler: (req, res) => route(req, res, 'GET', () => ({ sessions: sessionCatalog(ctx.bizagent,
+        id => ctx.agents?.get(id as SessionId)?.status ?? 'unloaded') })),
+    }),
+    ctx.webServer.register({ kind: 'exact', path: BIZAGENT_SESSION_CONTEXT_API,
+      handler: (req, res) => route(req, res, 'GET', async () => {
+        const { input, cwd, events } = await directorySession(req)
+        return sessionContext(ctx.bizagent, input.sessionId, cwd, events,
+          id => ctx.agents?.get(id as SessionId)?.status ?? 'unloaded')
+      }),
+    }),
     ctx.webServer.register({
       kind: 'exact', path: BIZAGENT_AGENT_DIRECTORY_API,
       handler: (req, res) => route(req, res, 'GET', async () => {

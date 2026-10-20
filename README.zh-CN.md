@@ -2,91 +2,56 @@
 
 给 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 上的 Agent 加上长期记忆和团队协作。
 
-**语言**：[English](./README.md) | [中文](./README.zh-CN.md)
+**语言**：[English](README.md) | 中文
 
-BizAgent 是一个 DSH 插件。DSH 负责运行 Agent；BizAgent 给每个长期 Agent 一个"Home"，它不随某一次对话结束而消失，
-并让几个 Agent 组成的小团队一起学习、一起干活：
+DSH 负责运行对话、调用模型和工具。BizAgent 为 Agent 提供持续存在的 **Home**，保存身份、经验和工作记录，
+让它能在新对话中复用经验，也能把工作交给其他 Agent，最后由你验收结果。
 
-- **Home。** 每个 Agent 的身份、记忆、知识和做事方法都放在它的 Home 里，是可以直接打开看的 Markdown 和 YAML 文件。
-  每次和这个 Agent 开新对话，都从它 Home 里已有的东西开始。
-- **带来源的经验。** 你纠正 Agent 或者教它一条规则时，它会把这条经验存下来，并记住是从哪段对话来的。
-  它自己还不确定的内容会先标成"候选"，核实后才生效。
-- **经过同意的分享。** 一个 Agent 可以把经验提议给另一个 Agent 的 Home，但只有那个 Home 的主人能接受。
-- **Agent 之间协作。** Agent 之间可以发信、派正式工作（只有一份要负责的结果），也可以一起跑项目，最后由人来验收。
+- **记得住**：经验保存为可查看的 Markdown/YAML，附带来源；新会话拿到身份和生效经验索引，按需读取正文。
+- **分得清**：每段会话归属一个 Home；引用其他 Home 的知识使用只读 Frame，分享经验需要目标方审批。
+- **交得出**：正式 Work 有接单、执行和交付记录；Project 汇总结果，等待你确认通过或退回返工。
+- **找得到**：会话顶部显示 Home，「工作与经验」显示进度、产物和项目，收件箱保存通知与回复。
 
-![DSH 里的 BizAgent 面板：示例商店团队和 5 分钟上手指南](./assets/screenshots/sample-team.png)
+## 从这里开始
 
-## 快速开始
+| 你现在的情况 | 下一步 | 完成标志 |
+| --- | --- | --- |
+| 第一次接触 DSH / 尚未装插件 | [安装与首次成功](packages/dsh/docs/quickstart.zh-CN.md) | 在「学习」里看到自己教的一条规则 |
+| 已能打开 BizAgent | [用户指南](packages/dsh/docs/user-guide.zh-CN.md) | 完成一次独立派工并亲自验收 |
+| 已有组织，想看进度或结果 | [入口与状态速查](packages/dsh/docs/user-guide.zh-CN.md#入口与状态速查) | 找到执行会话、交付内容和项目验收状态 |
+| 想研究实现或接入自己的宿主 | [文档导航](packages/dsh/docs/README.md) | 按需查概念、配置、架构或工具 |
 
-需要 Node.js 22.19 以上或 24 以上、[pnpm](https://pnpm.io)，以及一个模型：DeepSeek API Key，或任意兼容 OpenAI 接口的模型服务。
+第一次使用不必先建组织。先在自己的 Home 验证记忆，再尝试团队协作。
+已经有组织时继续使用现有组织；用户指南提供独立的练习 Home，不要求重置数据。
 
-```sh
-npm install --global @deepseek-ai/dsh@0.2.0-rc.2 pnpm
+![BizAgent 组织页的示例团队与上手向导](assets/screenshots/sample-team.png)
 
-git clone https://github.com/phonism/bizagent.git
-cd bizagent/packages/dsh
-npm ci && npm run build && npm pack
-dsh plugin --profile web add "$PWD"/bizagent-dsh-*.tgz
+## 一个完整例子
 
-export DEEPSEEK_API_KEY=sk-...   # 也可以在 DSH 的设置里添加别的模型
-dsh --profile web
-```
+在[用户指南](packages/dsh/docs/user-guide.zh-CN.md)中，你会创建两个练习 Home，让负责人记住 GMV 口径，
+把四笔虚构订单交给分析师在独立会话中核对。结果为 **300 元**；负责人复核并提交后，你在页面人工验收。
+每一步都给出入口、可复制的需求和成功标志。
 
-DSH 会打开浏览器。点左下角的 **BizAgent organization**，再点 **Create sample team（创建示例团队）**。
-示例团队自带一份小订单表和 5 分钟上手指南：教分析师一条规则、发起一个项目、让分析师在自己的会话里干活、
-验收结果、再把规则分享给团队。
-
-换用其他模型、建自己的组织、常见问题，见[快速上手](./packages/dsh/docs/quickstart.md)（英文）。
-
-## 示例团队，一步一步
-
-下面的截图来自用开源模型（Qwen3.8 27B）实际跑一遍上手指南。界面语言跟随浏览器，截图是英文界面。
-
-**1. 教一条规则。** 告诉数据分析师"GMV 不算已取消和已退款的订单"。它把规则存进自己的 Home，记下来自哪段对话；
-以后和分析师的每段新对话都会带上这条规则。
-
-![数据分析师的学习页：存下的 GMV 规则和它的来源](./assets/screenshots/learning.png)
-
-**2–3. 跑一个项目，再验收结果。** 增长负责人发起项目。项目对话把正式工作派给分析师，分析师在自己的会话里用
-`orders.csv` 算出 GMV；负责人复核后提交。只有你能点验收。
-
-![等待验收的项目结果：GMV 400.50 和它的依据](./assets/screenshots/project-review.png)
-
-**4. 分享给团队。** 分析师把规则提议给示例商店的 Home。在 Home 的主人接受之前，那边什么都不会变。
-
-![示例商店 Home 收件箱里，数据分析师发来的提议](./assets/screenshots/proposal.png)
+内置「示例商店」使用另一份 `orders.csv`，对应 GMV 为 **400.50 元**。
+两组数据的口径和用途见[用户指南](packages/dsh/docs/user-guide.zh-CN.md#内置示例团队)。
 
 ## 不用模型先试试
 
-Learning Lab 用真实的 BizAgent 服务跑三个写好的案例，数据放在临时目录，不需要模型，也不用启动 DSH：
+Learning Lab 在临时目录运行三个固定案例，不需要模型或 DSH 进程：
 
 ```sh
-cd packages/dsh
+git clone https://github.com/phonism/bizagent.git
+cd bizagent/packages/dsh
 npm ci
 npm run examples
 ```
 
-## 文档（英文）
+它验证服务逻辑；真实模型与浏览器的验证范围见[兼容与验证](packages/dsh/docs/verification.md)。
 
-- [快速上手](./packages/dsh/docs/quickstart.md)
-- [核心概念](./packages/dsh/docs/concepts.md)：Home、记忆、提议、信箱、正式工作、项目
-- [配置](./packages/dsh/docs/configuration.md)
-- [架构与信任边界](./packages/dsh/docs/architecture.md)
-- [Agent 工具](./packages/dsh/docs/tools.md)（由代码自动生成）
-- [Learning Lab](./packages/dsh/examples/README.md)
-- [更新记录](./packages/dsh/CHANGELOG.md)
+## 适用范围
 
-## 状态
+当前面向一个人在本机 DSH Web 中管理自己的 Agent 团队；DSH 是唯一支持的运行环境。
+包的开发基线、已实测的 DSH 版本和已验证功能见[兼容与验证](packages/dsh/docs/verification.md)。
+BizAgent 管理 Home 和交付记录的归属；机器上的文件与进程权限由 DSH 控制，详见[信任边界](packages/dsh/docs/architecture.md#trust-model)。
 
-BizAgent 1.0 对应 DSH `0.2.0-rc.2`，也就是 DSH 当前的发布版本（DSH 还没有正式版）。按本机单人使用设计：一个人拥有这个组织，并在 DSH 网页里验收结果。
-版本号遵循语义化版本：1.x 之内，对外接口（`@bizagent/dsh` 和 `@bizagent/dsh/host`）、Agent 工具名和 BizAgent 写下的文件格式都不会做不兼容的改动。
-
-这个仓库早期还包含一个 Claude Code / Agent SDK 的运行时，现在不在这里维护了；DSH 是唯一支持的运行环境。
-
-## 参与贡献
-
-见 [CONTRIBUTING.md](./CONTRIBUTING.md)。安全问题请按 [SECURITY.md](./SECURITY.md) 报告。
-
-## 许可证
-
-[MIT](./LICENSE)
+更多入口：[文档导航](packages/dsh/docs/README.md) · [参与贡献](CONTRIBUTING.md) · [安全报告](SECURITY.md) · [MIT 许可证](LICENSE)

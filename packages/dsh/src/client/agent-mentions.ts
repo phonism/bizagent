@@ -1,5 +1,6 @@
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type { BizAgentUiPort } from './api.js'
+import { frameReference } from '../frame-reference.js'
 
 const SOURCE = 'bizagent-agent'
 const HOME_ADDRESS = /^(business|role|capability):[a-z0-9][a-z0-9._/-]*$/i
@@ -51,7 +52,7 @@ export function createAgentMentionSource(api: Pick<BizAgentUiPort, 'agentDirecto
         const { sessionId, address } = decodeReference(ref)
         const current = await api.resolveAgentTarget(sessionId, address, signal)
         if (current.address !== address || current.type === 'personal') throw new Error('Agent target is no longer available')
-        return `@${address}\n[AGENT_FRAME_REQUEST] This selected mention identifies a shared Home; it has not loaded its context. Call bizagent_frame_open with address ${address} before answering about that Home. Only a successful Frame tool result means its context was read.`
+        return `@${address}\n${frameReference(address)}`
       },
     },
   }

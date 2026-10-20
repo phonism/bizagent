@@ -11,10 +11,11 @@ learning, and the records that connect agents.
 | `bizagent` | `@bizagent/dsh` | The core: binds sessions to Homes, adds the system prompt section, the Home snapshot, and the Agent tools, and runs Work, Inbox wake-ups, and learning reviews. |
 | `bizagent-ui` | `@bizagent/dsh/ui-host` | HTTP routes for the BizAgent panel. |
 | `bizagent-local-human` | `@bizagent/dsh/local-human-host` | Review routes for the local owner: Project acceptance, proposal decisions, My Inbox. |
-| (browser) | `@bizagent/dsh/client` | The panel, the `@` mention source, and the Frame bar above the composer. |
+| (browser) | `@bizagent/dsh/client` | Native organization panel, Session Home actions, Work & learning view, sidebar decorations, turn receipts, `@` references, and the Frame bar. |
 
 The core needs these DSH services: `agents`, `tools`, `systemPrompt`, `storageDomain`,
-`sessionQuery`, and `agentDefaultModel`. The web profile of DSH `0.2.0-rc.2` provides all of them.
+`sessionQuery`, and `agentDefaultModel`. See [Verification](verification.md) for the development
+baseline and separately tested DSH Web runtime.
 
 ```mermaid
 flowchart LR
@@ -54,15 +55,45 @@ every file) and DSH's own data directory.
 2. BizAgent adds a Home snapshot (identity plus the index of active assets) and, if mail is
    waiting, an Inbox digest. Both are skipped when the session already holds the current version.
    A failure here never blocks the session; it is reported in the panel's health status.
-3. The agent works. BizAgent tools read and write only the bound Home, except through proposals,
+3. At DSH's `agent/pre-step` boundary, selected `@Agent` references are revalidated and resolved
+   into logged, bounded Home snapshots before the model request. Transport markers are removed
+   from the admitted user text. A failed load produces an explicit notice. A retry loads a full
+   snapshot again so cancelled admission cannot leave the model relying on an unlogged copy.
+4. The agent works. BizAgent tools read and write only the bound Home, except through proposals,
    Inbox messages, Work, and Projects.
-4. At the end of a turn with an explicit correction, BizAgent asks the agent once to decide
+5. At the end of a turn with an explicit correction, BizAgent asks the agent once to decide
    whether to keep it.
-5. When the turn is saved, BizAgent records a Worklog for turns that used tools.
+6. When the turn is saved, BizAgent records a Worklog for turns that used tools.
+
+## Native DSH surfaces
+
+The organization workbench occupies DSH's keyed `main` panel and has a `sidebar.panellist`
+entry. It shares navigation with the host instead of covering it with an application-wide modal.
+The current Session remains available when returning to the conversation.
+
+Session headers expose the bound Home, candidate/proposal counts, and My Inbox. The
+`conversation.view` entry **Work & learning** shows Work directly dispatched from or assigned to
+this exact Session, related Projects, and successful BizAgent tool results. Sidebar row decorations,
+hover details, and a context-menu action identify Principals, Project Mains, workers, Inbox wakes,
+and learning reviews. `conversation.chat.turnTail` shows receipts from the original completed turn.
+An unfinished or failed tool call cannot produce a success receipt. Historical receipt status is
+labelled separately from the current Work record. Runtime status is read from live DSH Agents;
+an accepted Work does not imply a running worker.
+
+Authenticated `/api/bizagent/v1/sessions` supplies a lightweight catalog without opening Session
+logs or creating bindings. `/api/bizagent/v1/session-context` resolves one existing Session using
+the same live/persisted lookup and trust checks as the Frame API. Browser readers share requests,
+abort abandoned loads, stop polling when unobserved, and pause polling in hidden tabs. The Work
+view shows the latest 20 Work records and the latest 100 successful activity records.
 
 Sessions that BizAgent starts itself (Work workers, Inbox wake-ups, learning reviews, Principals,
 Project Mains) join DSH's default agent preset, so they have the same built-in tools as sessions
 you open, and use the host's current default model.
+
+Opening a worker from the Work view uses the authenticated agent-session route to reveal an
+already bound, locally owned Session in its Home Workspace. It does not recreate or start its
+Agent, and ordinary conversations keep their existing Workspace. For the user path, see the
+[quick start](quickstart.md#use-bizagent) or [Chinese user guide](user-guide.zh-CN.md).
 
 ## Trust model
 
@@ -98,8 +129,10 @@ What it does not do:
 
 ## Compatibility
 
-`@bizagent/dsh` declares its DSH packages as peer dependencies on the `0.2.0-rc.2` line. DSH
-checks those ranges at startup and skips plugins built for another line. BizAgent records
+`@bizagent/dsh` declares its DSH packages as peer dependencies at `^0.2.1-rc.2`; its development
+dependencies, installation guide, and runtime CI pin `0.2.1-rc.2`, also used for manual Web
+acceptance. See [Verification](verification.md). DSH validates activation compatibility at startup.
+BizAgent records
 `schemaVersion` on every stored record and refuses records it does not understand rather than
 guessing.
 
@@ -117,3 +150,5 @@ guessing.
 | [ui-host.ts](../src/ui-host.ts), [local-human-host.ts](../src/local-human-host.ts) | HTTP routes for the panel and local reviews |
 | [route-guard.ts](../src/route-guard.ts) | Loopback, origin, and DSH login checks for every route |
 | [client/](../src/client/) | Browser panel |
+| [session-surface.ts](../src/session-surface.ts) | Session catalog, current Work and Project summaries, durable tool-result receipts |
+| [frame-admission.ts](../src/frame-admission.ts) | Selected Home snapshots at the DSH step admission boundary |

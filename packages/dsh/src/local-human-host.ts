@@ -102,8 +102,19 @@ export async function apply(ctx: Context): Promise<void> {
             && Object.keys(input).length === 1
           const main = typeof input.projectId === 'string' && input.homeAddress === undefined
             && Object.keys(input).length === 1
-          if (!principal && !main) { reply(400, { error: 'invalid-request' }); return }
-          if (principal) {
+          const existing = typeof input.sessionId === 'string' && input.sessionId.length > 0
+            && Object.keys(input).length === 1
+          if (!principal && !main && !existing) { reply(400, { error: 'invalid-request' }); return }
+          if (existing) {
+            const binding = ctx.bizagent.ledger.getBinding(input.sessionId as string)
+            if (!binding || !ownsHome(binding.homeAddress)) { reply(403, { error: 'session-forbidden' }); return }
+            // Reveal a host-created worker without resuming its Agent or changing an ordinary
+            // conversation's existing Workspace. Runtime ownership remains with its runner.
+            const homePath = ctx.bizagent.store.homeWorkspacePath(binding.homeAddress)
+            const workspacePath = binding.cwd === homePath
+              ? await showInSidebar(binding.homeAddress, input.sessionId as string) : undefined
+            reply(200, { sessionId: input.sessionId, ...(workspacePath ? { workspacePath } : {}) })
+          } else if (principal) {
             if (!ownsHome(input.homeAddress as string)) { reply(403, { error: 'home-forbidden' }); return }
             const result = await ctx.bizagentAgentSessions.openPrincipal(input.homeAddress as string)
             reply(200, { ...result, workspacePath: await showInSidebar(result.homeAddress, result.sessionId) })

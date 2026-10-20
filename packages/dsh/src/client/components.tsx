@@ -19,6 +19,7 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
@@ -33,7 +34,7 @@ import type {
 } from '../ui-contract.js'
 import { BIZAGENT_SAMPLE_ORGANIZATION_ID } from '../ui-contract.js'
 import type { BizAgentUiPort, UiSharedKnowledgeReviews } from './api.js'
-import type { BizAgentUiController } from './controller.js'
+import type { BizAgentUiController, DashboardTarget, DashboardView } from './controller.js'
 import { ProjectsDashboard } from './projects.js'
 import { HumanInboxDashboard } from './human-inbox.js'
 import { SampleGuide } from './sample-guide.js'
@@ -43,6 +44,8 @@ import { homeName } from './home-name.js'
 export interface BizAgentUiFace {
   controller: BizAgentUiController
   api: BizAgentUiPort
+  openDashboard: (target?: DashboardTarget) => void
+  closeDashboard: () => void
   openAgentSession: (input: { homeAddress: string } | { projectId: string }) => Promise<void>
   /** Start a new chat in the DSH Workspace for this folder, adding the Workspace if needed. */
   openWorkspaceChat: (path: string) => Promise<void>
@@ -52,16 +55,15 @@ type LauncherProps = PropsRuntime<'sidebar.footer.action'>
   & InjectFace<BizAgentUiFace>
   & PropsLocale<'bizagent'>
 
-type DashboardProps = PropsRuntime<'shell.overlay'>
+type DashboardProps = PropsRuntime<'main'>
   & InjectFace<BizAgentUiFace>
   & PropsLocale<'bizagent'>
 
 const KINDS: LearningKind[] = ['memory', 'insight', 'knowledge', 'method']
 const STATUSES = ['active', 'candidate', 'superseded', 'retired'] as const
 const HOME_TYPES = ['personal', 'line', 'business', 'role', 'capability'] as const
-type DashboardView = 'organization' | 'learning' | 'projects' | 'humanInbox'
 
-function BizAgentMark() {
+export function BizAgentMark() {
   return (
     <svg className="ba-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true">
       <path className="ba-mark-base" d="M6 41 32 27 58 41 32 56Z" />
@@ -71,7 +73,7 @@ function BizAgentMark() {
   )
 }
 
-export function BizAgentLauncher({ wide, controller, api, t }: LauncherProps) {
+export function BizAgentLauncher({ wide, controller, api, openDashboard, t }: LauncherProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [overview, setOverview] = useState<UiOverview>()
   const currentOrganization = overview?.organization
@@ -90,7 +92,7 @@ export function BizAgentLauncher({ wide, controller, api, t }: LauncherProps) {
         data-rail={wide ? 'false' : 'true'}
         aria-label={t('launcher.aria')}
         aria-pressed={snapshot.open}
-        onClick={() => { controller.toggle() }}
+        onClick={() => { openDashboard() }}
       >
         <BizAgentMark />
         {wide ? (
@@ -104,11 +106,14 @@ export function BizAgentLauncher({ wide, controller, api, t }: LauncherProps) {
   )
 }
 
-export function BizAgentDashboard({ controller, api, openAgentSession, openWorkspaceChat, t, useSessions, useWorkspaces }: DashboardProps) {
-  const open = useSyncExternalStore(controller.subscribe, controller.getSnapshot).open
+export function BizAgentDashboard({ controller, api, openAgentSession, openWorkspaceChat, closeDashboard, t, useSessions, useWorkspaces }: DashboardProps) {
+  const navigation = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
+  const open = true
   // The Session shown in the main view is the one the main view retains (as DSH itself derives it).
-  const currentSessionId = useSessions(state => mainViewSession(state.byId)?.id)
-  const currentCwd = useSessions(state => mainViewSession(state.byId)?.cwd)
+  const retainedSessionId = useSessions(state => mainViewSession(state.byId)?.id)
+  const currentSessionId = navigation.target?.sessionId ?? retainedSessionId
+  const currentCwd = useSessions(state => navigation.target?.sessionId
+    ? state.byId[navigation.target.sessionId as SessionId]?.cwd : mainViewSession(state.byId)?.cwd)
   const workspaces = useWorkspaces(state => state.items)
   const currentWorkspace = useMemo(
     () => currentDshWorkspace(workspaces, currentSessionId, currentCwd),
@@ -138,6 +143,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, openWorks
       ? preferred
       : nextOverview.organization?.businessHome ?? nextOverview.homes[0]?.address
     const nextDetail = address === undefined ? undefined : await api.home(address, signal)
+    if (signal?.aborted) return
     setOverview(nextOverview)
     setSelectedAddress(address)
     setDetail(nextDetail)
@@ -153,13 +159,15 @@ export function BizAgentDashboard({ controller, api, openAgentSession, openWorks
     const abort = new AbortController()
     setLoading(true)
     setError(undefined)
-    void load(selectedAddress, abort.signal)
+    setView(navigation.target?.view ?? 'organization')
+    void load(navigation.target?.homeAddress ?? selectedAddress, abort.signal)
+      .then(() => { if (!abort.signal.aborted) setSelectedAsset(navigation.target?.assetId) })
       .catch((cause: unknown) => {
         if (!abort.signal.aborted) setError(errorMessage(cause))
       })
       .finally(() => { if (!abort.signal.aborted) setLoading(false) })
     return () => { abort.abort() }
-  }, [open])
+  }, [navigation.revision])
 
   // Which Home the chat in the main view belongs to, as the host resolves it.
   useEffect(() => {
@@ -205,15 +213,15 @@ export function BizAgentDashboard({ controller, api, openAgentSession, openWorks
   }
 
   useEffect(() => {
-    if (!open) return
+    if (!createOpen) return
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    dialogRef.current?.focus()
+    dialogRef.current?.querySelector<HTMLElement>('.ba-form-card select')?.focus()
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         if (dialogRef.current?.querySelector('.ba-modal-layer')) setCreateOpen(false)
-        else controller.close()
+        else setCreateOpen(false)
       }
       if (event.key === 'Tab') {
         const dialog = dialogRef.current
@@ -239,7 +247,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, openWorks
       previousFocus?.focus()
       document.body.style.overflow = previousOverflow
     }
-  }, [controller, open])
+  }, [createOpen])
 
   if (!open) return null
 
@@ -303,14 +311,11 @@ export function BizAgentDashboard({ controller, api, openAgentSession, openWorks
   }
 
   return (
-    <div className="ba-overlay" onPointerDown={(event) => {
-      if (event.target === event.currentTarget) controller.close()
-    }}>
+    <div className="ba-overlay ba-panel">
       <section
         ref={dialogRef}
         className="ba-dialog"
-        role="dialog"
-        aria-modal="true"
+        role="region"
         aria-labelledby="ba-dashboard-title"
         tabIndex={-1}
       >
@@ -327,7 +332,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, openWorks
             <button type="button" data-active={view === 'learning' ? 'true' : 'false'} onClick={() => { setView('learning') }}>
               {t('nav.learning')}
             </button>
-            {overview?.organization !== undefined ? (
+            {overview !== undefined ? (
               <button type="button" data-active={view === 'projects' ? 'true' : 'false'} onClick={() => { setView('projects') }}>
                 {t('nav.projects')}
               </button>
@@ -372,7 +377,7 @@ export function BizAgentDashboard({ controller, api, openAgentSession, openWorks
                 type="button"
                 className="ba-icon-button"
                 aria-label={t('dashboard.close')}
-                onClick={() => { controller.close() }}
+                onClick={closeDashboard}
               >
                 <IconCloseOutlineRegular size={16} />
               </button>
@@ -408,7 +413,8 @@ export function BizAgentDashboard({ controller, api, openAgentSession, openWorks
           <HumanInboxDashboard key={localHumanEpoch} api={api} t={t} />
         ) : view === 'projects' && overview !== undefined ? (
           <ProjectsDashboard key={`${currentSessionId ?? 'none'}:${localHumanEpoch}`} api={api}
-            sessionId={currentSessionId} onOpenMain={projectId => openAgentSession({ projectId })} t={t} />
+            sessionId={currentSessionId} initialProjectId={navigation.target?.projectId}
+            onOpenMain={projectId => openAgentSession({ projectId })} t={t} />
         ) : view === 'organization' && overview !== undefined && overview.organization === undefined ? (
           <OrganizationSetup
             api={api}
@@ -1511,8 +1517,8 @@ function CreateHomeDialog({ api, onCancel, onCreated, t }: {
 
   return (
     <div className="ba-modal-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) onCancel() }}>
-      <form className="ba-form-card" onSubmit={(event) => { void submit(event) }}>
-        <h3>{t('create.title')}</h3>
+      <form className="ba-form-card" role="dialog" aria-modal="true" aria-labelledby="ba-create-home-title" tabIndex={-1} onSubmit={(event) => { void submit(event) }}>
+        <h3 id="ba-create-home-title">{t('create.title')}</h3>
         <p className="ba-form-subtitle">{t('create.subtitle')}</p>
         <div className="ba-form-grid">
           <label className="ba-form-field">

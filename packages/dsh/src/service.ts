@@ -2742,6 +2742,8 @@ export class BizAgentService {
     address: string
     mode?: FrameMode
     refresh?: boolean
+    /** Host admission retries need a full snapshot without invalidating other fresh Frames. */
+    forceSnapshot?: boolean
   }): Promise<Record<string, unknown>> {
     const binding = await this.requireDurableBinding(agent)
     const targetAddress = resolveHomeDirectoryTarget(this.store.listHomes(), binding.homeAddress, input.address)
@@ -2766,7 +2768,7 @@ export class BizAgentService {
       const advanceEpoch = input.refresh || compactionPending
       if (advanceEpoch && currentEpoch === Number.MAX_SAFE_INTEGER) throw new Error('Frame context epoch exhausted')
       const contextEpoch = currentEpoch + (advanceEpoch ? 1 : 0)
-      const injectBundle = existing === undefined || existing.contextEpoch !== contextEpoch
+      const injectBundle = input.forceSnapshot || existing === undefined || existing.contextEpoch !== contextEpoch
         || existing.revision !== targetHome.revision || existing.digest !== frameDigest
       status = existing === undefined ? 'opened' : injectBundle ? 'delta' : 'unchanged'
       context = renderFrameParticipation(targetAddress, targetHome.displayName, mode, status, contextEpoch)

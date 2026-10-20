@@ -84,6 +84,11 @@ echo "==> Install"
 npm --prefix "$PKG_DIR" ci
 
 echo
+echo "==> Documentation"
+node scripts/check-docs.mjs
+git diff --check
+
+echo
 echo "==> Typecheck"
 npm --prefix "$PKG_DIR" run typecheck
 
@@ -96,6 +101,10 @@ else
   echo "==> Build (tests skipped)"
   npm --prefix "$PKG_DIR" run build
 fi
+
+echo
+echo "==> Tool reference"
+(cd "$PKG_DIR" && node scripts/tools-reference.mjs --check)
 
 echo
 echo "==> Pack dry-run"

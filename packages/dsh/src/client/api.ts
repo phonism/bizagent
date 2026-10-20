@@ -6,6 +6,10 @@ import {
   BIZAGENT_AGENT_SESSION_API,
   BIZAGENT_FRAME_STATUS_API,
   BIZAGENT_HUMAN_INBOX_API,
+  BIZAGENT_SESSION_CONTEXT_API,
+  BIZAGENT_SESSION_CATALOG_API,
+  type UiSessionContext,
+  type UiSessionSummary,
   type UiAgentDirectory,
   type UiAgentTarget,
   type UiApiError,
@@ -35,6 +39,8 @@ export interface UiSharedKnowledgeReviews {
 }
 
 export interface BizAgentUiPort {
+  sessionContext(sessionId: string, signal?: AbortSignal): Promise<UiSessionContext>
+  sessionCatalog(signal?: AbortSignal): Promise<{ sessions: UiSessionSummary[] }>
   /** `viaToken` is false when DSH's own browser login already identifies the person. */
   localHumanStatus?(signal?: AbortSignal): Promise<{ available: boolean; authenticated: boolean; viaToken?: boolean }>
   setLocalHumanToken?(token: string | undefined): Promise<boolean>
@@ -53,6 +59,7 @@ export interface BizAgentUiPort {
   handleHumanInbox(messageId: string): Promise<unknown>
   replyHumanInbox(messageId: string, subject: string, body: string, idempotencyKey: string): Promise<unknown>
   home(address: string, signal?: AbortSignal): Promise<UiHomeDetail>
+  revealSession(sessionId: string): Promise<{ sessionId: string; workspacePath?: string }>
   learningSchedule(home: string, signal?: AbortSignal): Promise<UiLearningSchedule>
   memoryUseOutcomes(sessionId: string, assetId: string, beforeWorkId?: string,
     signal?: AbortSignal): Promise<UiMemoryUseOutcomes>
@@ -85,6 +92,15 @@ export class BizAgentUiHttpError extends Error {
 
 export class BizAgentUiHttpPort implements BizAgentUiPort {
   private localHumanToken: string | undefined
+
+  sessionContext(sessionId: string, signal?: AbortSignal): Promise<UiSessionContext> {
+    return request(`${BIZAGENT_SESSION_CONTEXT_API}?${new URLSearchParams({ sessionId })}`,
+      signal === undefined ? {} : { signal })
+  }
+
+  sessionCatalog(signal?: AbortSignal): Promise<{ sessions: UiSessionSummary[] }> {
+    return request(BIZAGENT_SESSION_CATALOG_API, signal === undefined ? {} : { signal })
+  }
 
   private humanHeaders(): Record<string, string> {
     return this.localHumanToken === undefined ? {} : { Authorization: `Bearer ${this.localHumanToken}` }
@@ -124,6 +140,10 @@ export class BizAgentUiHttpPort implements BizAgentUiPort {
     kind: 'principal' | 'project-main'; homeAddress: string; logicalAddress: string;
     sessionId: string; workspacePath: string; projectId?: string }> {
     return post(BIZAGENT_AGENT_SESSION_API, input, this.humanHeaders())
+  }
+
+  revealSession(sessionId: string): Promise<{ sessionId: string; workspacePath?: string }> {
+    return post(BIZAGENT_AGENT_SESSION_API, { sessionId }, this.humanHeaders())
   }
 
   agentDirectory(sessionId: string, query: string, signal?: AbortSignal): Promise<UiAgentDirectory> {

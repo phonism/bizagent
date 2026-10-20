@@ -48,6 +48,43 @@ export interface UiProjectOutcomeReviewInbox {
 }
 export const BIZAGENT_FRAME_STATUS_API = `${BIZAGENT_UI_API}/frames`
 export const BIZAGENT_HUMAN_INBOX_API = '/api/bizagent/human-inbox'
+export const BIZAGENT_SESSION_CONTEXT_API = `${BIZAGENT_UI_API}/session-context`
+export const BIZAGENT_SESSION_CATALOG_API = `${BIZAGENT_UI_API}/sessions`
+
+export type UiSessionKind = 'conversation' | 'principal' | 'project-main' | 'work' | 'learning' | 'inbox'
+export type UiAgentRuntime = 'running' | 'idle' | 'unloaded'
+export interface UiSessionSummary {
+  sessionId: string
+  home: UiFrameParticipation['primaryHome']
+  kind: UiSessionKind
+  runtime: UiAgentRuntime
+  projectId?: string
+  projectTitle?: string
+  workId?: string
+  workGoal?: string
+  workStatus?: FormalWork['status']
+}
+export interface UiSessionActivity {
+  id: string
+  turn: number
+  seq: number
+  kind: 'memory' | 'proposal' | 'work' | 'project' | 'frame' | 'learning'
+  action: string
+  title: string
+  status?: string
+  entityId?: string
+}
+export interface UiSessionContext {
+  summary: UiSessionSummary
+  frames: UiFrameParticipation['frames']
+  home: { activeAssets: number; candidates: number; pendingProposals: number }
+  work: Array<Pick<FormalWork, 'id' | 'goal' | 'requester' | 'assignee' | 'status' | 'updatedAt'
+    | 'workerSessionId' | 'returnToSessionId' | 'projectId' | 'resultSubject' | 'resultBody' | 'resultArtifacts'>
+    & { runtime: UiAgentRuntime; requesterName: string; assigneeName: string }>
+  projects: Array<Pick<FormalProject, 'id' | 'title' | 'status' | 'goal'>>
+  activity: UiSessionActivity[]
+  moreWork: boolean
+}
 export type UiHumanInboxSummary = Pick<InboxMessage,
   'id' | 'fromAddress' | 'to' | 'cc' | 'subject' | 'kind' | 'priority' | 'due' | 'replyTo' | 'humanAction' | 'sentAt'> & {
     delivery?: InboxDelivery; notification?: InboxHumanNotification }

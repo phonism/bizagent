@@ -2,77 +2,61 @@
 
 Long-term memory and teamwork for agents on [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
-BizAgent gives each long-running DSH agent a **Home**: its identity, memories, knowledge, and
-methods, kept as plain files and loaded into every new session. Agents save lessons with links to
-the conversations they came from, propose lessons to each other's Homes, send each other mail,
-hand off formal Work, and run Projects that a person accepts.
+BizAgent adds lasting Homes, evidence-backed learning, governed sharing, Inbox messages, formal
+Work, and Projects with human acceptance. DSH runs the models, tools, and sessions.
 
-![The BizAgent panel in DSH, showing the Sample Shop team and its five-minute guide](https://raw.githubusercontent.com/phonism/bizagent/main/assets/screenshots/sample-team.png)
+## Start here
 
-## Install
+- **Install:** [English quick start](docs/quickstart.md) / [中文安装指南](docs/quickstart.zh-CN.md).
+- **Already installed:** [use BizAgent](docs/quickstart.md#use-bizagent) / [中文用户指南](docs/user-guide.zh-CN.md).
+- **Look up a feature:** [documentation map](docs/README.md), [concepts](docs/concepts.md),
+  [configuration](docs/configuration.md), [59 Agent tools](docs/tools.md).
+- **Check versions and evidence:** [verification and compatibility](docs/verification.md).
 
-Requires Node.js 22.19+ or 24+, [pnpm](https://pnpm.io), and DSH `0.2.0-rc.2`.
+Start with one saved rule in your personal Home. An organization is optional for that first step;
+existing organizations can use separate practice Homes without resetting data.
 
-```sh
-npm install --global @deepseek-ai/dsh@0.2.0-rc.2 pnpm
-# from a checkout of https://github.com/phonism/bizagent
-cd packages/dsh && npm ci && npm run build && npm pack
-dsh plugin --profile web add "$PWD"/bizagent-dsh-*.tgz
-dsh --profile web
-```
+## In DSH Web
 
-In DSH, open **BizAgent organization** at the bottom left and choose **Create sample team** for a
-guided tour. The [quick start](docs/quickstart.md) covers models and troubleshooting.
+| Surface | Use |
+| --- | --- |
+| BizAgent organization panel | Organize Homes; inspect learning; review proposals and Projects |
+| Session Home button | Check which Home owns the conversation and open its learning |
+| Work & learning tab | Inspect this session's Work, worker/result links, and related Projects |
+| Turn receipts | Open the successful records saved in a completed turn |
+| Composer `@` and Frame bar | Load shared Home context in the current session |
+| My Inbox | Read agent messages and reply to the originating session |
 
-## What you get
-
-- **Homes** for personal agents, roles, shared capabilities, and the organization itself, as
-  Markdown and YAML in `~/BizAgent`.
-- **59 Agent tools** ([reference](docs/tools.md)) to remember, search, and revise assets; read
-  other Homes through read-only Frames; propose lessons; send Inbox mail; dispatch and complete
-  formal Work; and run Projects.
-- **A panel in the DSH web app**: organization map, each Home's learning and Worklogs, Projects
-  with human acceptance, proposal review, and your own Inbox.
-- **Sessions BizAgent starts on its own**: a worker for handed-off Work, a reader for new mail,
-  and optional scheduled learning reviews, each in the right Home.
-
-## Documentation
-
-- [Quick start](docs/quickstart.md)
-- [Concepts](docs/concepts.md)
-- [Configuration](docs/configuration.md)
-- [Architecture and trust model](docs/architecture.md)
-- [Agent tools](docs/tools.md)
-- [Learning Lab examples](examples/README.md)
-- [Changelog](CHANGELOG.md)
+Formal Work starts in an independent worker when both Homes share an owner. A Frame provides
+read-only context in the current session. Only a person can accept a submitted Project result.
 
 ## Package entry points
 
 | Import | Use |
 | --- | --- |
-| `@bizagent/dsh` | The core DSH plugin (`name`, `inject`, `Config`, `apply`) and its types. |
-| `@bizagent/dsh/ui-host` | DSH plugin serving the panel's HTTP routes. |
-| `@bizagent/dsh/local-human-host` | DSH plugin serving review routes for the local owner. |
-| `@bizagent/dsh/client` | The browser bundle DSH Web loads. |
-| `@bizagent/dsh/host` | Building blocks for hosts with their own login: review route handlers, notification runners, Home archives. |
+| `@bizagent/dsh` | Core plugin and types (`name`, `inject`, `Config`, `apply`) |
+| `@bizagent/dsh/ui-host` | Authenticated panel HTTP routes |
+| `@bizagent/dsh/local-human-host` | Local owner's review and Inbox routes |
+| `@bizagent/dsh/client` | Browser bundle loaded by DSH Web |
+| `@bizagent/dsh/host` | Building blocks for hosts with their own authentication |
 
-The package also installs a `bizagent` command for Home folders: `init`, `home create|list`,
-`doctor`, `reindex`, and `archive export|verify|import`. Run `bizagent --help` for usage.
+The package also installs `bizagent` for Home files: `init`, `home create|list`, `doctor`,
+`reindex`, and `archive export|verify|import`. Run `bizagent --help` for usage.
 
 ## Development
 
 ```sh
 npm ci
-npm test              # build and unit tests
+npm test                 # builds and runs automated tests
 npm run typecheck
-npm run examples      # Learning Lab, no model needed
-npm run smoke         # CLI smoke
-npm run smoke:plugin-add   # needs a dsh 0.2.0-rc.2 CLI on PATH
+npm run examples         # service scenarios without a model
+npm run smoke:local-human
+npm run smoke:session-ui
+npm run pack:check
 ```
 
-The `smoke:*` scripts start isolated DSH profiles against a local fake model; see
-[CONTRIBUTING.md](../../CONTRIBUTING.md).
-
-## License
+Runtime smokes use isolated profiles and a local fake model. See [verification](docs/verification.md)
+for the distinction between service tests, runtime integration, and real-model browser acceptance.
+For user-visible changes, update the [changelog](CHANGELOG.md).
 
 [MIT](LICENSE)

@@ -1,12 +1,30 @@
 # Changelog
 
-## 1.0.0
+## 1.0.0 — 2026-10-20
 
 The first stable release: everything since `0.1.0-alpha.2`.
 
+### Native DSH integration and onboarding
+
+- Reorganize the READMEs around installation, first success, daily use, and references. Add a
+  concise Chinese install guide and a six-step delivery walkthrough, with UI locations, success
+  checks, and separate examples for the 300 and 400.50 GMV datasets. Record the tested DSH
+  version and verification scope.
+- Move the organization workbench into DSH's native sidebar/main-panel navigation. Home,
+  Project, and memory links open the corresponding record and preserve the Session context.
+- Add Session Home actions, an unread Inbox count, sidebar Session identities and Home actions,
+  a **Work & learning** conversation view, and completed-turn receipts backed by successful
+  durable tool results. Show live Agent runtime separately from recorded Work status.
+- Resolve selected `@Agent` Homes at DSH's pre-step admission boundary and log their bounded
+  snapshots before model calls. Loading failures are explicit; cancelled admission can be retried
+  without assuming an unlogged snapshot was delivered. Hide transport markers from user text.
+- Share browser requests across Session surfaces and cancel abandoned loads.
+
 ### Runs on DSH 0.2
 
-- Targets DSH `0.2.0-rc.2`, the current `latest` on npm. DSH 0.2 skips plugins whose DSH peers
+- Installation, development dependencies, and runtime CI pin DSH `0.2.1-rc.2`. DSH peers require
+  `^0.2.1-rc.2`. CI also checks selected Frame admission and Session Work/result surfaces.
+  DSH 0.2 skips plugins whose DSH peers
   name another line, so 0.1 builds no longer load.
 - Sessions that BizAgent starts (Principals, Project Mains, Work workers, Inbox wake-ups, learning
   reviews) join DSH's default agent preset and use the host's default model. Without the model,

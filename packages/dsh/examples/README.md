@@ -51,7 +51,7 @@ Learning lab passed: 3 scenarios. Temporary data removed.
 | Model and data | None; fixed fixtures | Not whether a model calls the tools well |
 
 To see the same loops with a real model, follow the sample team in the
-[quick start](../docs/quickstart.md#4-try-the-sample-team).
+[quick start](../docs/quickstart.md#use-bizagent).
 
 ## Read the code
 

@@ -361,6 +361,8 @@ test('UI host remains a separate optional Cordis adapter', async (t) => {
     '/api/bizagent/v1/overview',
     '/api/bizagent/v1/projects',
     '/api/bizagent/v1/projects/detail',
+    '/api/bizagent/v1/session-context',
+    '/api/bizagent/v1/sessions',
   ])
   for (const dispose of disposers.reverse()) await dispose()
   assert.equal(routes.size, 0)
@@ -588,6 +590,9 @@ test('UI routes require DSH browser login when the host provides it', async t =>
   const connection = { requestRejection: request => request.headers.cookie === 'dsh-login=valid' ? undefined : 401 }
   const call = routeHarness(service, { services: { connection } })
   const headers = { host: '127.0.0.1:4100' }
+  for (const path of ['/api/bizagent/v1/sessions', '/api/bizagent/v1/session-context?sessionId=untrusted']) {
+    assert.equal((await call(path, { headers })).status, 401)
+  }
   const anonymous = await call('/api/bizagent/v1/overview', { headers })
   assert.equal(anonymous.status, 401)
   assert.equal(anonymous.body.error.code, 'authentication-required')

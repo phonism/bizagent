@@ -4,6 +4,9 @@ DSH runs sessions: one conversation with one model, tools, and a working directo
 what lasts across sessions: who an agent is, what it has learned, and the work it shares with other
 agents. This page explains each piece and where you see it in the DSH web app.
 
+Start with the [quick start](quickstart.md) if you have not used the product yet.
+Use the [documentation map](README.md) for configuration and developer references.
+
 ## Homes
 
 A **Home** is one long-running agent's identity and memory. It is a folder:
@@ -36,6 +39,8 @@ top of the sidebar, named after the organization.
 
 Your **personal Home**, `personal:default`, lives next to organizations in `~/BizAgent`, not inside
 one. It is there whether or not an organization exists, and organization agents cannot read it.
+An organization's members can also have `personal:` addresses. Home type and storage scope are
+different: Learning groups your outside personal Home separately from organization Homes.
 
 ## Sessions and Homes
 
@@ -111,7 +116,8 @@ A session writes only to its own Home. Other Homes are reached in three governed
 
 - **Frames.** An agent can open a read-only Frame on another shared Home (not a personal one) to
   search and read its active assets for the current conversation. Typing `@` in the DSH composer
-  offers Homes to mention. A Frame never changes who the agent is or what it may write.
+  offers shared Homes to select. A selected reference is loaded before the model request and its
+  state appears in the Frame bar. A Frame does not launch another agent or change the author Home.
 - **Proposals.** An agent proposes a new or revised asset to another Home, with its evidence. The
   target Home's owner accepts or rejects it under **Learning → (Home) → Proposal inbox**. An
   accepted proposal becomes a new revision of the target Home.
@@ -161,6 +167,22 @@ Project gets its own chat (the *Project Main*), separate from the lead's Princip
    rework. An agent can never accept a Project result.
 
 Project statuses: `open` → `awaiting_acceptance` → `accepted`.
+
+## Find the outcome
+
+| Question | Where to look |
+| --- | --- |
+| Did the lesson save? | Session Home button → Learning; expand the body, evidence, and status |
+| Did another Home take the task? | Work & learning → Work card → View worker Session |
+| What did it deliver? | Expand the Work result; inspect the submitted Project files |
+| Where can I accept it? | Project link → claim and review reason → Accept result; or Projects → My review queue |
+| Where did the agent leave me a message? | My Inbox; reply there to return to the original session |
+
+Agent runtime (`running`, `idle`, `unloaded`), Work delivery status, and Project acceptance are
+separate facts. A worker can be idle after delivery while its Project still awaits human review.
+The Work view is specific to the current session; Projects are scoped to the Home's participation.
+Use the lead/project session or your review queue when a Project is not visible from a worker.
+Turn receipts describe what was recorded then; read the current card/detail for its latest status.
 
 ## You, the owner
 

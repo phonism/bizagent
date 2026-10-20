@@ -21,15 +21,16 @@ function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-export function ProjectsDashboard({ api, sessionId, onOpenMain, t }: {
+export function ProjectsDashboard({ api, sessionId, initialProjectId, onOpenMain, t }: {
   api: BizAgentUiPort
   sessionId: string | undefined
+  initialProjectId?: string | undefined
   onOpenMain?: (projectId: string) => Promise<void>
   t: T
 }) {
   const [list, setList] = useState<UiProjectList>()
   const [detail, setDetail] = useState<UiProjectDetail>()
-  const [selectedId, setSelectedId] = useState<string>()
+  const [selectedId, setSelectedId] = useState<string | undefined>(initialProjectId)
   const [attentionOnly, setAttentionOnly] = useState(false)
   const [loading, setLoading] = useState(false)
   const [moreBusy, setMoreBusy] = useState(false)
@@ -40,12 +41,20 @@ export function ProjectsDashboard({ api, sessionId, onOpenMain, t }: {
   const [outcomeInbox, setOutcomeInbox] = useState<UiProjectOutcomeReviewInbox | null>()
   const [outcomeMoreBusy, setOutcomeMoreBusy] = useState(false)
 
+  useEffect(() => { if (initialProjectId) setSelectedId(initialProjectId) }, [initialProjectId])
+
   useEffect(() => {
     if (sessionId === undefined) { setList(undefined); setSelectedId(undefined); return }
     const abort = new AbortController()
     setLoading(true)
     setError(undefined)
-    void api.projects(sessionId, undefined, abort.signal).then(next => {
+    void api.projects(sessionId, undefined, abort.signal).then(async next => {
+      // A deep link may address a Project outside the first page; read it with the same
+      // Session authorization, then pin its real record into this view.
+      if (initialProjectId && !next.projects.some(project => project.id === initialProjectId)) {
+        const target = await api.projectDetail(sessionId, initialProjectId, abort.signal)
+        next = { ...next, projects: [target.project, ...next.projects] }
+      }
       if (abort.signal.aborted) return
       setList(next)
       setSelectedId(current => next.projects.some(project => project.id === current)
@@ -53,7 +62,7 @@ export function ProjectsDashboard({ api, sessionId, onOpenMain, t }: {
     }).catch(cause => { if (!abort.signal.aborted) setError(message(cause)) })
       .finally(() => { if (!abort.signal.aborted) setLoading(false) })
     return () => { abort.abort() }
-  }, [api, sessionId, revision])
+  }, [api, sessionId, revision, initialProjectId])
 
   useEffect(() => {
     if (!api.projectOutcomeReviewInbox) { setOutcomeInbox(null); return }
