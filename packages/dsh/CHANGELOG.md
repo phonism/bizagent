@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a 90-second Chinese-captioned demo from an isolated real-model DSH run: save and recall
+  a rule, dispatch independent Work, inspect delivery, and accept the Project in the browser.
+  Link the MP4, subtitles, and reproduction notes from both repository READMEs.
 - Show Chinese by default in the repository and plugin READMEs, with an English link at the
   top of each page. Include the English README in the npm package.
 

@@ -8,6 +8,10 @@ DSH runs conversations, models, and tools. BizAgent gives each agent a lasting *
 identity, lessons, and work records. New conversations can reuse those lessons; agents can hand
 work to teammates and submit results for you to accept.
 
+[![90-second demo: memory, independent Work, and human acceptance](assets/demo/poster.zh-CN.webp)](assets/demo/bizagent-demo.zh-CN.mp4)
+
+[Watch the 90-second demo (Chinese captions)](assets/demo/bizagent-demo.zh-CN.mp4) · [Demo notes and reproduction](assets/demo/README.md)
+
 - **Keep lessons with evidence.** Assets are readable Markdown/YAML with links to their sources.
   New sessions receive identity and an index of active assets; the agent reads full bodies as needed.
 - **Keep ownership clear.** Each session belongs to one Home. Frames provide read-only context
@@ -29,8 +33,6 @@ work to teammates and submit results for you to accept.
 You can try memory in your personal Home before creating an organization. If an organization
 already exists, keep using it; the [Chinese user guide](packages/dsh/docs/user-guide.zh-CN.md)
 uses separate practice Homes rather than resetting it.
-
-![The sample team and its guide in BizAgent's organization page](assets/screenshots/sample-team.png)
 
 ## A complete example
 

@@ -11,7 +11,7 @@ const files = [
   'packages/dsh/CHANGELOG.md',
 ].map(path => join(root, path))
 for (const directory of [
-  'packages/dsh/docs', 'packages/dsh/examples', '.github',
+  'packages/dsh/docs', 'packages/dsh/examples', 'assets/demo', '.github',
 ]) await collect(join(root, directory))
 
 const failures = []

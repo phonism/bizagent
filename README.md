@@ -7,6 +7,10 @@
 DSH 负责运行对话、调用模型和工具。BizAgent 为 Agent 提供持续存在的 **Home**，保存身份、经验和工作记录，
 让它能在新对话中复用经验，也能把工作交给其他 Agent，最后由你验收结果。
 
+[![90 秒演示：记住规则、独立派工、人工验收](assets/demo/poster.zh-CN.webp)](assets/demo/bizagent-demo.zh-CN.mp4)
+
+[观看 90 秒中文字幕演示](assets/demo/bizagent-demo.zh-CN.mp4) · [演示说明与复现](assets/demo/README.md)
+
 - **记得住**：经验保存为可查看的 Markdown/YAML，附带来源；新会话拿到身份和生效经验索引，按需读取正文。
 - **分得清**：每段会话归属一个 Home；引用其他 Home 的知识使用只读 Frame，分享经验需要目标方审批。
 - **交得出**：正式 Work 有接单、执行和交付记录；Project 汇总结果，等待你确认通过或退回返工。
@@ -23,8 +27,6 @@ DSH 负责运行对话、调用模型和工具。BizAgent 为 Agent 提供持续
 
 第一次使用不必先建组织。先在自己的 Home 验证记忆，再尝试团队协作。
 已经有组织时继续使用现有组织；用户指南提供独立的练习 Home，不要求重置数据。
-
-![BizAgent 组织页的示例团队与上手向导](assets/screenshots/sample-team.png)
 
 ## 一个完整例子
 
