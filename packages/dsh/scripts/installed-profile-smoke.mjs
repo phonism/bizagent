@@ -17,10 +17,10 @@ try {
     cwd: packageRoot, env: { ...process.env, npm_config_cache: join(temporary, 'pack-cache') },
   })
   const tarball = packed.stdout.trim()
-  assert.match(tarball, /^bizagent-dsh-.*\.tgz$/)
+  assert.match(tarball, /^bizagent-dsh-plugin-.*\.tgz$/)
   const consumer = join(temporary, 'consumer')
   await mkdir(consumer)
-  const dependencies = { '@bizagent/dsh': `file:../${tarball}` }
+  const dependencies = { '@bizagent/dsh-plugin': `file:../${tarball}` }
   for (const name of Object.keys(manifest.peerDependencies)) {
     const version = lock.packages[`node_modules/${name}`]?.version
     assert.ok(version, `missing locked DSH peer: ${name}`)
@@ -38,7 +38,7 @@ try {
     dependencies, overrides }
   await writeFile(join(consumer, 'package.json'), `${JSON.stringify(host, null, 2)}\n`)
   await run('npm', ['install', '--no-audit', '--no-fund'], { cwd: consumer })
-  const resolved = await run('node', ['-e', "import('@bizagent/dsh').then(m => { if (typeof m.apply !== 'function') process.exit(2) })"],
+  const resolved = await run('node', ['-e', "import('@bizagent/dsh-plugin').then(m => { if (typeof m.apply !== 'function') process.exit(2) })"],
     { cwd: consumer })
   assert.equal(resolved.stderr, '')
   if (process.argv.includes('--install-only')) {

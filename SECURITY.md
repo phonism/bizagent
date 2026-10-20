@@ -1,6 +1,6 @@
 # Security Policy
 
-This policy covers the `@bizagent/dsh` DeepSeek Harness (DSH) plugin in this repository.
+This policy covers the `@bizagent/dsh-plugin` DeepSeek Harness (DSH) plugin in this repository.
 
 ## Supported versions
 

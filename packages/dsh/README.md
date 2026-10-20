@@ -1,4 +1,4 @@
-# @bizagent/dsh
+# @bizagent/dsh-plugin
 
 Long-term memory and teamwork for agents on [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
@@ -6,6 +6,10 @@ BizAgent adds lasting Homes, evidence-backed learning, governed sharing, Inbox m
 Work, and Projects with human acceptance. DSH runs the models, tools, and sessions.
 
 ## Start here
+
+```sh
+dsh plugin --profile web add @bizagent/dsh-plugin@1.0.1
+```
 
 - **Install:** [English quick start](docs/quickstart.md) / [中文安装指南](docs/quickstart.zh-CN.md).
 - **Already installed:** [use BizAgent](docs/quickstart.md#use-bizagent) / [中文用户指南](docs/user-guide.zh-CN.md).
@@ -34,11 +38,11 @@ read-only context in the current session. Only a person can accept a submitted P
 
 | Import | Use |
 | --- | --- |
-| `@bizagent/dsh` | Core plugin and types (`name`, `inject`, `Config`, `apply`) |
-| `@bizagent/dsh/ui-host` | Authenticated panel HTTP routes |
-| `@bizagent/dsh/local-human-host` | Local owner's review and Inbox routes |
-| `@bizagent/dsh/client` | Browser bundle loaded by DSH Web |
-| `@bizagent/dsh/host` | Building blocks for hosts with their own authentication |
+| `@bizagent/dsh-plugin` | Core plugin and types (`name`, `inject`, `Config`, `apply`) |
+| `@bizagent/dsh-plugin/ui-host` | Authenticated panel HTTP routes |
+| `@bizagent/dsh-plugin/local-human-host` | Local owner's review and Inbox routes |
+| `@bizagent/dsh-plugin/client` | Browser bundle loaded by DSH Web |
+| `@bizagent/dsh-plugin/host` | Building blocks for hosts with their own authentication |
 
 The package also installs `bizagent` for Home files: `init`, `home create|list`, `doctor`,
 `reindex`, and `archive export|verify|import`. Run `bizagent --help` for usage.
@@ -57,6 +61,7 @@ npm run pack:check
 
 Runtime smokes use isolated profiles and a local fake model. See [verification](docs/verification.md)
 for the distinction between service tests, runtime integration, and real-model browser acceptance.
+After publishing, `npm run smoke:registry` checks the same flow using the public npm package.
 For user-visible changes, update the [changelog](CHANGELOG.md).
 
 [MIT](LICENSE)

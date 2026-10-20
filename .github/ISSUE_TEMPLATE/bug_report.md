@@ -8,7 +8,7 @@ assignees: ""
 
 ## Environment / 环境
 
-- `@bizagent/dsh` version or Git commit:
+- `@bizagent/dsh-plugin` version or Git commit:
 - DSH version:
 - Node version and OS:
 - Installed from source, tarball, or package registry:

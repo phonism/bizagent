@@ -143,7 +143,7 @@ and `BIZAGENT_HOME` directories and leave the existing instance intact.
 ## Hosts with their own login
 
 Embedding BizAgent in another host, with real user accounts or notification channels, uses the
-building blocks exported from `@bizagent/dsh/host`: route handlers for Project review, proposal
+building blocks exported from `@bizagent/dsh-plugin/host`: route handlers for Project review, proposal
 review, shared Knowledge review, and the human Inbox, each taking your own authentication and
 authorization callbacks; runners for notifications and stalled conversations; and Home archive
 export, verify, and import. Disable the local review row when you mount your own:

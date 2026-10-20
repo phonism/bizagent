@@ -1,6 +1,6 @@
 import { build } from 'esbuild'
 
-const moduleId = '@bizagent/dsh'
+const moduleId = '@bizagent/dsh-plugin'
 
 await build({
   entryPoints: ['src/client/index.tsx'],

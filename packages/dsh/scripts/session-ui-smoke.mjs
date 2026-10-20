@@ -85,7 +85,7 @@ try {
   await new Promise(resolve => model.listen(0, '127.0.0.1', resolve))
   const modules = join(root, 'profiles/web/node_modules/@bizagent')
   await mkdir(modules, { recursive: true })
-  await symlink(packageRoot, join(modules, 'dsh'))
+  await symlink(packageRoot, join(modules, 'dsh-plugin'))
   const patch = join(root, 'ui.patch.yml')
   await writeFile(patch, (await readFile(join(packageRoot, 'cordis.patch.yml'), 'utf8')) + `
 - id: agent-default-model

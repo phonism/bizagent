@@ -5,8 +5,8 @@ import vm from 'node:vm'
 
 test('published package declares an installable DSH bundle', async () => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(manifest.name, '@bizagent/dsh')
-  assert.equal(manifest.version, '1.0.0')
+  assert.equal(manifest.name, '@bizagent/dsh-plugin')
+  assert.equal(manifest.version, '1.0.1')
   assert.equal(manifest.peerDependencies['@deepseek-ai/cordis'], '~4.0.5')
   assert.equal(manifest.dependencies['@deepseek-ai/schemastery'], '3.18.5')
   assert.equal(manifest.dependencies.yaml, '2.9.0')
@@ -23,13 +23,13 @@ test('published package declares an installable DSH bundle', async () => {
   assert.equal(manifest.exports['./ui-host'].default, './lib/ui-host.js')
   const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
   assert.match(patch, /id: bizagent/)
-  assert.match(patch, /name: '@bizagent\/dsh'/)
+  assert.match(patch, /name: '@bizagent\/dsh-plugin'/)
   assert.match(patch, /id: bizagent-ui/)
-  assert.match(patch, /name: '@bizagent\/dsh\/ui-host'/)
+  assert.match(patch, /name: '@bizagent\/dsh-plugin\/ui-host'/)
 
   const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   assert.match(client, /^window\.__ModuleLoader__\.load\(\{/)
-  assert.match(client, /id: "@bizagent\/dsh"/)
+  assert.match(client, /id: "@bizagent\/dsh-plugin"/)
   assert.match(client, /sidebar\.panellist/)
   assert.match(client, /conversation\.chat\.turnTail/)
   assert.match(client, /bizagent-agent/)
@@ -55,7 +55,7 @@ test('published package declares an installable DSH bundle', async () => {
       },
     },
   })
-  assert.equal(registration?.id, '@bizagent/dsh')
+  assert.equal(registration?.id, '@bizagent/dsh-plugin')
   assert.equal(typeof registration?.factory, 'function')
   const clientExports = registration.factory((id) => {
     assert.ok(!id.startsWith('node:'), `browser bundle imports Node builtin: ${id}`)

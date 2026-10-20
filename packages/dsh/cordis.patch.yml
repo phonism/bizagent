@@ -2,13 +2,13 @@
 # The row is inserted after the standard bundles and remains user-patchable.
 - insert:
     - id: bizagent
-      name: '@bizagent/dsh'
+      name: '@bizagent/dsh-plugin'
       config:
         defaultHome: 'personal:default'
         autoCreateDefaultHome: true
         identityMaxBytes: 6144
         indexMaxBytes: 16384
     - id: bizagent-ui
-      name: '@bizagent/dsh/ui-host'
+      name: '@bizagent/dsh-plugin/ui-host'
     - id: bizagent-local-human
-      name: '@bizagent/dsh/local-human-host'
+      name: '@bizagent/dsh-plugin/local-human-host'

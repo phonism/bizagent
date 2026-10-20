@@ -17,7 +17,7 @@ What it does:
   --publish   Same checks, then tag the current commit, push the tag, and npm publish.
 
 Rules:
-  - Releases packages/dsh (@bizagent/dsh). The version comes from its package.json;
+  - Releases packages/dsh (@bizagent/dsh-plugin). The version comes from its package.json;
     bump it and update CHANGELOG.md in a normal reviewed commit first.
   - The working tree must be clean and HEAD must match <remote>/<branch>.
     This script never stages or commits files.

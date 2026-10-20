@@ -13,17 +13,15 @@
 # 仅在未安装 DSH / pnpm 时执行：
 npm install --global @deepseek-ai/dsh@0.2.1-rc.2 pnpm@11
 
-git clone https://github.com/phonism/bizagent.git
-cd bizagent/packages/dsh
-npm ci
-npm run build
-BIZAGENT_PACKAGE=$(npm pack --silent)
-dsh plugin --profile web add "$PWD/$BIZAGENT_PACKAGE"
+dsh plugin --profile web add @bizagent/dsh-plugin@1.0.1
 ```
 
 安装、开发依赖和 CI 统一使用 DSH `0.2.1-rc.2`，与真实浏览器验收版本一致。
 验证范围见[兼容与验证](verification.md)。
 安装和启动需要使用同一个 profile、同一个 `DSH_HOME`；默认是 `web` 和 `~/.dsh`。
+
+若装过旧包 `@bizagent/dsh`，先用 `dsh plugin --profile web remove @bizagent/dsh` 移除旧依赖，
+再安装新包。保留原 `BIZAGENT_HOME`，已有数据可继续使用。
 
 ## 连接模型并启动
 

@@ -16,7 +16,8 @@ const packageRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const root = await mkdtemp(join(await realpath(tmpdir()), 'bizagent-dsh-profile-'))
 const packed = process.argv.includes('--packed')
 const installedConsumer = process.env.BIZAGENT_INSTALLED_CONSUMER
-const pluginAddTarball = process.env.BIZAGENT_PLUGIN_ADD_TARBALL
+const pluginAddSpec = process.env.BIZAGENT_PLUGIN_ADD_SPEC
+  ?? (process.env.BIZAGENT_PLUGIN_ADD_TARBALL ? resolve(process.env.BIZAGENT_PLUGIN_ADD_TARBALL) : undefined)
 const localHuman = process.env.BIZAGENT_PROFILE_SMOKE_HUMAN === '1'
 const humanToken = localHuman ? randomBytes(32).toString('hex') : undefined
 const humanProjectId = stableId('project', 'personal:default:profile-main')
@@ -33,9 +34,9 @@ const modelErrors = []
 let web
 let modelServer
 let modelPort
-const runtimeCwd = installedConsumer ? resolve(installedConsumer) : pluginAddTarball ? root : packageRoot
+const runtimeCwd = installedConsumer ? resolve(installedConsumer) : pluginAddSpec ? root : packageRoot
 const run = promisify(execFile)
-let patch = join(installedConsumer ? join(runtimeCwd, 'node_modules', '@bizagent', 'dsh') : packageRoot,
+let patch = join(installedConsumer ? join(runtimeCwd, 'node_modules', '@bizagent', 'dsh-plugin') : packageRoot,
   'cordis.patch.yml')
 let active
 
@@ -45,11 +46,11 @@ async function installPackedContent(moduleDirectory) {
     env: { ...process.env, npm_config_cache: join(root, 'npm-cache') },
   })
   const [manifest] = JSON.parse(stdout)
-  assert.equal(manifest.name, '@bizagent/dsh')
+  assert.equal(manifest.name, '@bizagent/dsh-plugin')
   for (const path of ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js']) {
     assert.ok(manifest.files.some(file => file.path === path), `tarball missing ${path}`)
   }
-  const destination = join(moduleDirectory, 'dsh')
+  const destination = join(moduleDirectory, 'dsh-plugin')
   await mkdir(destination)
   await run('tar', ['-xzf', join(root, manifest.filename), '-C', destination, '--strip-components=1'])
   await symlink(join(packageRoot, 'node_modules'), join(destination, 'node_modules'), 'dir')
@@ -57,7 +58,7 @@ async function installPackedContent(moduleDirectory) {
 }
 
 function launch() {
-  const child = spawn('dsh', ['--profile', 'web', ...(pluginAddTarball ? [] : ['--patch', patch]),
+  const child = spawn('dsh', ['--profile', 'web', ...(pluginAddSpec ? [] : ['--patch', patch]),
     '--host', '127.0.0.1', '--port', '0', '--no-open'], {
     cwd: runtimeCwd,
     env: { ...process.env, DSH_HOME: root, BIZAGENT_HOME: join(root, 'bizagent'), DSH_TELEMETRY_DISABLED: '1' },
@@ -314,21 +315,21 @@ try {
   }
   const moduleDirectory = join(root, 'profiles', 'web', 'node_modules', '@bizagent')
   await mkdir(moduleDirectory, { recursive: true })
-  if (pluginAddTarball) {
-    const args = ['plugin', '--profile', 'web', 'add', resolve(pluginAddTarball)]
+  if (pluginAddSpec) {
+    const args = ['plugin', '--profile', 'web', 'add', pluginAddSpec]
     if (process.env.npm_config_offline === 'true') args.push('--offline')
     const installOptions = { cwd: runtimeCwd,
       env: { ...process.env, DSH_HOME: root, BIZAGENT_HOME: join(root, 'bizagent'),
         PATH: `${join(packageRoot, 'node_modules', '.bin')}:${process.env.PATH ?? ''}` } }
     await run('dsh', args, installOptions)
     const profile = JSON.parse(await readFile(join(root, 'profiles', 'web', 'package.json'), 'utf8'))
-    assert.ok(profile.dsh?.profile?.bundles.includes('@bizagent/dsh'))
-    patch = join(moduleDirectory, 'dsh', 'cordis.patch.yml')
-  } else if (installedConsumer) await symlink(join(runtimeCwd, 'node_modules', '@bizagent', 'dsh'),
-    join(moduleDirectory, 'dsh'), 'dir')
+    assert.ok(profile.dsh?.profile?.bundles.includes('@bizagent/dsh-plugin'))
+    patch = join(moduleDirectory, 'dsh-plugin', 'cordis.patch.yml')
+  } else if (installedConsumer) await symlink(join(runtimeCwd, 'node_modules', '@bizagent', 'dsh-plugin'),
+    join(moduleDirectory, 'dsh-plugin'), 'dir')
   else if (packed) await installPackedContent(moduleDirectory)
-  else await symlink(packageRoot, join(moduleDirectory, 'dsh'), 'dir')
-  if (!pluginAddTarball) {
+  else await symlink(packageRoot, join(moduleDirectory, 'dsh-plugin'), 'dir')
+  if (!pluginAddSpec) {
     const configuredPatch = join(root, 'bizagent-smoke.patch.yml')
     const sourcePatch = await readFile(patch, 'utf8')
     assert.match(sourcePatch, /indexMaxBytes: 16384/)
@@ -428,7 +429,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
         humanProjectId)
     }
   }
-  if (!pluginAddTarball) {
+  if (!pluginAddSpec) {
     const learningSchedule = await json(base,
       '/api/bizagent/v1/learning/schedule?home=personal%3Adefault')
     assert.equal(learningSchedule.hostEnabled, true)
@@ -446,7 +447,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
   // DSH Web serves plugin browser bundles as revisioned combo scripts advertised by its page.
   const page = await (await webFetch(web, '/')).text()
   const comboPath = [...page.matchAll(/plugins\/\?\?[^"'\s<>]+/g)].map(match => match[0].replaceAll('&amp;', '&'))
-    .find(path => path.includes('@bizagent/dsh/client.js'))
+    .find(path => path.includes('@bizagent/dsh-plugin/client.js'))
   assert.ok(comboPath, 'DSH Web page does not load the BizAgent client bundle')
   const client = await webFetch(web, `/${comboPath}`)
   assert.equal(client.status, 200)
@@ -561,7 +562,7 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
       }
     }
   }
-  if (!pluginAddTarball) {
+  if (!pluginAddSpec) {
     const restoredLearning = await json(base,
       '/api/bizagent/v1/learning/schedule?home=personal%3Adefault')
     assert.equal(restoredLearning.policy.revision, 1)
@@ -604,9 +605,9 @@ ${modelPort === undefined ? '' : `          '${join(root, 'bizagent', 'homes', s
     await prompt(base, lineSessionId, 'SMOKE_SEARCH_SHARED_LINE')
     await assertToolSucceededContaining(base, lineSessionId, 'Line source verification rule')
   }
-  if (!pluginAddTarball) assert.equal((await json(base,
+  if (!pluginAddSpec) assert.equal((await json(base,
     '/api/bizagent/v1/learning/schedule?home=personal%3Adefault')).policy.enabled, false)
-  process.stdout.write(`BizAgent real DSH ${pluginAddTarball ? 'plugin-add ' : installedConsumer ? 'installed-package ' : packed ? 'packed-content ' : ''}profile smoke passed: UI, Home API, ${humanToken ? 'five Principal types, separate Project Main, Frame/Seat/Inbox, formal Work, Bearer human acceptance, Home and shared Knowledge retrieval after crash, ' : ''}${pluginAddTarball ? '' : 'learning policy persistence, '}restart, and crash recovery.\n`)
+  process.stdout.write(`BizAgent real DSH ${pluginAddSpec ? 'plugin-add ' : installedConsumer ? 'installed-package ' : packed ? 'packed-content ' : ''}profile smoke passed: UI, Home API, ${humanToken ? 'five Principal types, separate Project Main, Frame/Seat/Inbox, formal Work, Bearer human acceptance, Home and shared Knowledge retrieval after crash, ' : ''}${pluginAddSpec ? '' : 'learning policy persistence, '}restart, and crash recovery.\n`)
 } finally {
   if (active) await stop(active.child)
   if (modelServer) {

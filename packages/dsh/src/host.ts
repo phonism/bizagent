@@ -1,5 +1,5 @@
 // Building blocks for hosts that bring their own user authentication, notification channels,
-// or backup jobs. The local single-user setup does not need them: `@bizagent/dsh/local-human-host`
+// or backup jobs. The local single-user setup does not need them: `@bizagent/dsh-plugin/local-human-host`
 // mounts the review and Inbox routes for one person on 127.0.0.1.
 
 export { BIZAGENT_PROJECT_REVIEW_API } from './ui-contract.js'

@@ -234,7 +234,7 @@ try {
     status: 'active', sourceRefs: [{ type: 'document', uri: 'smoke:worker-method', digest: 'local-smoke' }] })
   const moduleDirectory = join(root, 'profiles', 'headless', 'node_modules', '@bizagent')
   await mkdir(moduleDirectory, { recursive: true })
-  await symlink(packageRoot, join(moduleDirectory, 'dsh'), 'dir')
+  await symlink(packageRoot, join(moduleDirectory, 'dsh-plugin'), 'dir')
   const patch = join(root, 'agent.patch.yml')
   await writeFile(patch, `- insert:
     - id: storage
@@ -248,7 +248,7 @@ try {
       config:
         backend: json
     - id: bizagent
-      name: '@bizagent/dsh'
+      name: '@bizagent/dsh-plugin'
       config:
         defaultHome: personal:default
         autoCreateDefaultHome: true

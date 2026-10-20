@@ -8,15 +8,15 @@ This page separates development baselines, manual acceptance, and reproducible c
 
 | Baseline | Version | Evidence |
 | --- | --- | --- |
-| Package | `@bizagent/dsh` 1.0.0 | Package manifest and [release notes](../CHANGELOG.md). |
+| Package | `@bizagent/dsh-plugin` 1.0.1 | Package manifest and [release notes](../CHANGELOG.md). |
 | Installation / development / CI runtime | DSH `0.2.1-rc.2` | Installation guide, dev dependencies, and runtime CI use the same version. DSH peers declare `^0.2.1-rc.2`. |
 | Manual browser acceptance, 2026-10-20 | DSH `0.2.1-rc.2` | The 1.0.0 implementation used in DSH Web with DeepSeek-V4.1-Flash / High. |
 
 Keep an existing working installation unless an upgrade is needed; inspect DSH activation errors
 when using a different version. Other DSH versions need their own compatibility checks.
 
-Within BizAgent 1.x, semantic versioning covers public entry points (`@bizagent/dsh` and
-`@bizagent/dsh/host`), Agent tool names, and persisted file formats. Internal `lib/` modules are
+Within BizAgent 1.x, semantic versioning covers public entry points (`@bizagent/dsh-plugin` and
+`@bizagent/dsh-plugin/host`), Agent tool names, and persisted file formats. Internal `lib/` modules are
 not a public API; DSH runtime compatibility still needs its own verification.
 
 ## What was checked
@@ -59,6 +59,8 @@ npm ci
 npm test
 npm run smoke:local-human
 npm run smoke:session-ui
+# After this version is published, check installation from npm:
+npm run smoke:registry
 ```
 
 The smoke scripts start real isolated DSH profiles but use a deterministic local model. They

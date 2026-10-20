@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 — 2026-10-20
+
+- Rename the npm package to `@bizagent/dsh-plugin` so its role as a DSH plugin is clear.
+  Update the bundle, browser module, public imports, and install checks together.
+- Install directly from npm with `dsh plugin --profile web add @bizagent/dsh-plugin@1.0.1`;
+  the quick starts no longer require cloning or building the source.
+- Keep the `bizagent` CLI, plugin IDs, and persisted Home formats unchanged. DSH remains
+  pinned to `0.2.1-rc.2`.
+
 ## 1.0.0 — 2026-10-20
 
 The first stable release: everything since `0.1.0-alpha.2`.

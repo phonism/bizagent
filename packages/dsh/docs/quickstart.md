@@ -15,17 +15,16 @@ there is no need to replace a working installation just to try the plugin.
 # Only if DSH / pnpm is not installed:
 npm install --global @deepseek-ai/dsh@0.2.1-rc.2 pnpm@11
 
-git clone https://github.com/phonism/bizagent.git
-cd bizagent/packages/dsh
-npm ci
-npm run build
-BIZAGENT_PACKAGE=$(npm pack --silent)
-dsh plugin --profile web add "$PWD/$BIZAGENT_PACKAGE"
+dsh plugin --profile web add @bizagent/dsh-plugin@1.0.1
 ```
 
 Installation, development dependencies, and CI use DSH `0.2.1-rc.2`, the same version used for
 manual browser acceptance. See
 [Verification](verification.md). Install into the same profile and `DSH_HOME` you intend to run.
+
+If you installed the former `@bizagent/dsh` package, remove that dependency before adding the
+new package: `dsh plugin --profile web remove @bizagent/dsh`. Keep your `BIZAGENT_HOME`;
+the data format is unchanged.
 
 ## Connect a model and open DSH
 

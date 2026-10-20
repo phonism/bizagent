@@ -1,6 +1,6 @@
 {
-  "name": "@bizagent/dsh",
-  "version": "1.0.0",
+  "name": "@bizagent/dsh-plugin",
+  "version": "1.0.1",
   "description": "Long-term memory and teamwork for agents on DeepSeek Harness (DSH): Agent Homes, evidence-backed learning, governed sharing, Inbox, formal Work, and Projects.",
   "repository": {
     "type": "git",
@@ -65,6 +65,7 @@
     "smoke:install": "npm run build && node scripts/installed-profile-smoke.mjs --install-only",
     "smoke:installed": "npm run build && node scripts/installed-profile-smoke.mjs",
     "smoke:plugin-add": "npm run build && node scripts/plugin-add-smoke.mjs",
+    "smoke:registry": "npm run build && node scripts/plugin-add-smoke.mjs --registry",
     "smoke:agent": "npm run build && node scripts/agent-profile-smoke.mjs",
     "smoke:work": "npm run build && node scripts/work-profile-smoke.mjs",
     "smoke:project": "npm run build && node scripts/project-profile-smoke.mjs",

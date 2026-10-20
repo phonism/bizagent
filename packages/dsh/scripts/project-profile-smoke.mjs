@@ -362,7 +362,7 @@ try {
   await store.createHome({ address: 'role:analyst', owner: 'smoke-owner' })
   const moduleDirectory = join(root, 'profiles', 'headless', 'node_modules', '@bizagent')
   await mkdir(moduleDirectory, { recursive: true })
-  await symlink(packageRoot, join(moduleDirectory, 'dsh'), 'dir')
+  await symlink(packageRoot, join(moduleDirectory, 'dsh-plugin'), 'dir')
   const patch = join(root, 'project.patch.yml')
   await writeFile(patch, `- insert:
     - id: storage
@@ -376,7 +376,7 @@ try {
       config:
         backend: json
     - id: bizagent
-      name: '@bizagent/dsh'
+      name: '@bizagent/dsh-plugin'
       config:
         homeRoot: '${homeRoot}'
         defaultHome: personal:default

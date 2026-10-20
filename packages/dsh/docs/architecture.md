@@ -8,10 +8,10 @@ learning, and the records that connect agents.
 
 | Plugin row | Module | Does |
 | --- | --- | --- |
-| `bizagent` | `@bizagent/dsh` | The core: binds sessions to Homes, adds the system prompt section, the Home snapshot, and the Agent tools, and runs Work, Inbox wake-ups, and learning reviews. |
-| `bizagent-ui` | `@bizagent/dsh/ui-host` | HTTP routes for the BizAgent panel. |
-| `bizagent-local-human` | `@bizagent/dsh/local-human-host` | Review routes for the local owner: Project acceptance, proposal decisions, My Inbox. |
-| (browser) | `@bizagent/dsh/client` | Native organization panel, Session Home actions, Work & learning view, sidebar decorations, turn receipts, `@` references, and the Frame bar. |
+| `bizagent` | `@bizagent/dsh-plugin` | The core: binds sessions to Homes, adds the system prompt section, the Home snapshot, and the Agent tools, and runs Work, Inbox wake-ups, and learning reviews. |
+| `bizagent-ui` | `@bizagent/dsh-plugin/ui-host` | HTTP routes for the BizAgent panel. |
+| `bizagent-local-human` | `@bizagent/dsh-plugin/local-human-host` | Review routes for the local owner: Project acceptance, proposal decisions, My Inbox. |
+| (browser) | `@bizagent/dsh-plugin/client` | Native organization panel, Session Home actions, Work & learning view, sidebar decorations, turn receipts, `@` references, and the Frame bar. |
 
 The core needs these DSH services: `agents`, `tools`, `systemPrompt`, `storageDomain`,
 `sessionQuery`, and `agentDefaultModel`. See [Verification](verification.md) for the development
@@ -123,13 +123,13 @@ What it does not do:
   using BizAgent's tools. Ownership is checked against `directory.yaml`, and `bizagent doctor`
   reports Home files that no longer load or no longer match their recorded owner.
 - **No multiple users.** Everyone signed in to DSH acts as the owner. Hosts that need accounts
-  should mount the routes from `@bizagent/dsh/host` behind their own login.
+  should mount the routes from `@bizagent/dsh-plugin/host` behind their own login.
 - **No sandbox.** Use DSH's permission modes and sandbox settings to limit what agents may do on
   your machine.
 
 ## Compatibility
 
-`@bizagent/dsh` declares its DSH packages as peer dependencies at `^0.2.1-rc.2`; its development
+`@bizagent/dsh-plugin` declares its DSH packages as peer dependencies at `^0.2.1-rc.2`; its development
 dependencies, installation guide, and runtime CI pin `0.2.1-rc.2`, also used for manual Web
 acceptance. See [Verification](verification.md). DSH validates activation compatibility at startup.
 BizAgent records
